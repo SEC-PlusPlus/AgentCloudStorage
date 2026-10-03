@@ -1,0 +1,11 @@
+.gocache/
+.idea/
+docker/minio-data/
+docker/docker-compose.yml
+cmd/minio-smoke/
+LEARNING_NOTES.md
+.env
+.env.*
+!.env.example
+*.log
+*.exe
