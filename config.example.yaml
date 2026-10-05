@@ -1,0 +1,26 @@
+# Local development defaults. Copy this file to config.yaml before starting the Go server.
+# Keep passwords and JWT keys in environment variables, not in this YAML file.
+server:
+  addr: ":8080"
+
+mysql:
+  host: 127.0.0.1
+  port: 3307
+  user: govault
+  database: govault
+  max_open_conns: 20
+  max_idle_conns: 10
+  conn_max_idle_time: 30m
+
+redis:
+  addr: 127.0.0.1:6380
+  db: 0
+
+minio:
+  endpoint: 127.0.0.1:9000
+  bucket: govault
+  use_ssl: false
+
+jwt:
+  issuer: govault
+  access_ttl: 2h

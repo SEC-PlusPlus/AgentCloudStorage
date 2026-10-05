@@ -3,6 +3,7 @@ package httpapi
 import (
 	"PersonalCloudStorage/internal/auth"
 	"PersonalCloudStorage/internal/user"
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -38,12 +39,19 @@ type loginResponse struct {
 type AuthHandler struct {
 	service      *user.Service
 	tokenManager *auth.TokenManager
+	loginLimiter LoginLimiter
 }
 
-func NewAuthHandler(service *user.Service, tokenManager *auth.TokenManager) *AuthHandler {
+type LoginLimiter interface {
+	Allow(ctx context.Context, email, remoteAddr string) (bool, error)
+	Reset(ctx context.Context, email, remoteAddr string) error
+}
+
+func NewAuthHandler(service *user.Service, tokenManager *auth.TokenManager, loginLimiter LoginLimiter) *AuthHandler {
 	return &AuthHandler{
 		service:      service,
 		tokenManager: tokenManager,
+		loginLimiter: loginLimiter,
 	}
 }
 
@@ -100,6 +108,16 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		})
 		return
 	}
+	allowed, err := h.loginLimiter.Allow(c.Request.Context(), request.Email, c.Request.RemoteAddr)
+	if err != nil {
+		_ = c.Error(err)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "login temporarily unavailable"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many login attempts; try again later"})
+		return
+	}
 
 	authenticatedUser, err := h.service.Authenticate(
 		c.Request.Context(),
@@ -127,6 +145,11 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			})
 		}
 
+		return
+	}
+	if err := h.loginLimiter.Reset(c.Request.Context(), request.Email, c.Request.RemoteAddr); err != nil {
+		_ = c.Error(err)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "login temporarily unavailable"})
 		return
 	}
 	accessToken, expiresAt, err :=

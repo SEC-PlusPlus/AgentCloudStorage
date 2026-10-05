@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/minio/minio-go/v7"
@@ -101,5 +102,70 @@ func (s *MinIOStorage) Delete(ctx context.Context, key string) error {
 	return s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{})
 }
 
+func (s *MinIOStorage) StartMultipart(ctx context.Context, key string, contentType string) (string, error) {
+	core := minio.Core{Client: s.client}
+	return core.NewMultipartUpload(ctx, s.bucket, key, minio.PutObjectOptions{ContentType: contentType})
+}
+
+func (s *MinIOStorage) UploadPart(ctx context.Context, key string, uploadID string, partNumber int, src io.Reader, size int64) (UploadedPart, error) {
+	core := minio.Core{Client: s.client}
+
+	part, err := core.PutObjectPart(ctx, s.bucket, key, uploadID, partNumber, src, size, minio.PutObjectPartOptions{})
+	if err != nil {
+		return UploadedPart{}, err
+	}
+
+	return UploadedPart{
+		Number: part.PartNumber,
+		Size:   part.Size,
+		ETag:   part.ETag,
+	}, nil
+}
+
+func (s *MinIOStorage) CompleteMultipart(ctx context.Context, key string, uploadID string, parts []UploadedPart) (ObjectInfo, error) {
+	if len(parts) == 0 {
+		return ObjectInfo{}, errors.New("no parts to complete")
+	}
+
+	completed := make([]minio.CompletePart, 0, len(parts))
+	for _, part := range parts {
+		if part.Number < 1 || part.ETag == "" {
+			return ObjectInfo{}, errors.New("invalid uploaded part")
+		}
+
+		completed = append(completed, minio.CompletePart{
+			PartNumber: part.Number,
+			ETag:       part.ETag,
+		})
+	}
+
+	sort.Slice(completed, func(i, j int) bool {
+		return completed[i].PartNumber < completed[j].PartNumber
+	})
+	for i := 1; i < len(completed); i++ {
+		if completed[i].PartNumber == completed[i-1].PartNumber {
+			return ObjectInfo{}, errors.New("duplicate part number")
+		}
+	}
+
+	core := minio.Core{Client: s.client}
+	_, err := core.CompleteMultipartUpload(ctx, s.bucket, key, uploadID, completed, minio.PutObjectOptions{})
+	if err != nil {
+		return ObjectInfo{}, err
+	}
+
+	return s.Stat(ctx, key)
+}
+
+func (s *MinIOStorage) AbortMultipart(ctx context.Context, key string, uploadID string) error {
+	core := minio.Core{Client: s.client}
+	err := core.AbortMultipartUpload(ctx, s.bucket, key, uploadID)
+	if err != nil && minio.ToErrorResponse(err).Code == minio.NoSuchUpload {
+		return nil
+	}
+	return err
+}
+
 // 编译期检查: MinIOStorage 是否完整实现了 ObjectStorage 的四个方法。
 var _ ObjectStorage = (*MinIOStorage)(nil)
+var _ MultipartStorage = (*MinIOStorage)(nil)

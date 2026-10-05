@@ -6,7 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func NewRouter(fileHandler *FileHandler, folderHandler *FolderHandler, authHandler *AuthHandler, tokenManager *auth.TokenManager) *gin.Engine {
+func NewRouter(fileHandler *FileHandler, folderHandler *FolderHandler, uploadHandler *UploadHandler, authHandler *AuthHandler, tokenManager *auth.TokenManager) *gin.Engine {
 	router := gin.New()
 
 	router.Use(gin.Logger())
@@ -36,7 +36,6 @@ func NewRouter(fileHandler *FileHandler, folderHandler *FolderHandler, authHandl
 			protected.GET("/files/search", fileHandler.Search)
 			protected.GET("/storage/usage", fileHandler.StorageUsage)
 
-
 			protected.POST("/folders", folderHandler.Create)
 			protected.GET("/folders", folderHandler.List)
 			protected.PATCH("/folders/:id", folderHandler.Rename)
@@ -45,6 +44,12 @@ func NewRouter(fileHandler *FileHandler, folderHandler *FolderHandler, authHandl
 
 			protected.GET("/trash", fileHandler.ListTrash)
 			protected.DELETE("/trash/:id", fileHandler.PermanentDelete)
+
+			protected.POST("/uploads", uploadHandler.Start)
+			protected.PUT("/uploads/:id/parts/:number", uploadHandler.UploadPart)
+			protected.GET("/uploads/:id", uploadHandler.Progress)
+			protected.POST("/uploads/:id/complete", uploadHandler.Complete)
+			protected.DELETE("/uploads/:id", uploadHandler.Cancel)
 		}
 	}
 

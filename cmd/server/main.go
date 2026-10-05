@@ -2,31 +2,44 @@ package main
 
 import (
 	"PersonalCloudStorage/internal/auth"
+	"PersonalCloudStorage/internal/config"
 	"PersonalCloudStorage/internal/database"
 	"PersonalCloudStorage/internal/file"
 	"PersonalCloudStorage/internal/folder"
 	"PersonalCloudStorage/internal/httpapi"
 	"PersonalCloudStorage/internal/storage"
+	"PersonalCloudStorage/internal/upload"
 	"PersonalCloudStorage/internal/user"
+	"context"
 	"log"
-	"os"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatal("读取配置失败:", err)
+	}
+
 	objectStorage, err := storage.NewMinIO(storage.MinIOConfig{
-		Endpoint:  os.Getenv("MINIO_ENDPOINT"),
-		AccessKey: os.Getenv("MINIO_ACCESS_KEY"),
-		SecretKey: os.Getenv("MINIO_SECRET_KEY"),
-		Bucket:    "govault",
-		UseSSL:    false,
+		Endpoint:  cfg.MinIO.Endpoint,
+		AccessKey: cfg.MinIO.AccessKey,
+		SecretKey: cfg.MinIO.SecretKey,
+		Bucket:    cfg.MinIO.Bucket,
+		UseSSL:    cfg.MinIO.UseSSL,
 	})
 
 	if err != nil {
 		log.Fatal("创建MinIO存储失败:", err)
 	}
 
-	db, err := database.OpenMySQL(os.Getenv("MYSQL_DSN"))
+	db, err := database.OpenMySQLWithPool(cfg.MySQL.ConnectionString(), database.PoolConfig{
+		MaxOpenConns:    cfg.MySQL.MaxOpenConns,
+		MaxIdleConns:    cfg.MySQL.MaxIdleConns,
+		ConnMaxIdleTime: cfg.MySQL.ConnMaxIdleTime,
+	})
 	if err != nil {
 		log.Fatal("连接MySQL失败:", err)
 	}
@@ -36,6 +49,18 @@ func main() {
 		log.Fatal("获取数据库连接池失败:", err)
 	}
 	defer sqlDB.Close()
+	redisClient := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Addr,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+	defer redisClient.Close()
+	pingCtx, cancelPing := context.WithTimeout(context.Background(), 3*time.Second)
+	err = redisClient.Ping(pingCtx).Err()
+	cancelPing()
+	if err != nil {
+		log.Fatal("连接Redis失败:", err)
+	}
 
 	folderRepository := folder.NewGORMRepository(db)
 	fileRepository := file.NewGORMRepository(db)
@@ -52,13 +77,16 @@ func main() {
 		folderService,
 	)
 	fileHandler := httpapi.NewFileHandler(fileService)
+	uploadRepository := upload.NewGORMRepository(db)
+	uploadService := upload.NewService(objectStorage, uploadRepository, folderService)
+	uploadHandler := httpapi.NewUploadHandler(uploadService)
 
 	userRepository := user.NewGORMRepository(db)
 	userService := user.NewService(userRepository)
 	tokenManager, err := auth.NewTokenManager(auth.TokenConfig{
-		Secret:    os.Getenv("JWT_SECRET"),
-		Issuer:    "govault",
-		AccessTTL: 2 * time.Hour,
+		Secret:    cfg.JWT.Secret,
+		Issuer:    cfg.JWT.Issuer,
+		AccessTTL: cfg.JWT.AccessTTL,
 	})
 	if err != nil {
 		log.Fatal("创建JWT管理器失败:", err)
@@ -67,16 +95,18 @@ func main() {
 	authHandler := httpapi.NewAuthHandler(
 		userService,
 		tokenManager,
+		auth.NewRedisLoginLimiter(redisClient),
 	)
 
 	router := httpapi.NewRouter(
 		fileHandler,
 		folderHandler,
+		uploadHandler,
 		authHandler,
 		tokenManager,
 	)
 
-	if err := router.Run(":8080"); err != nil {
+	if err := router.Run(cfg.Server.Addr); err != nil {
 		log.Fatal("启动HTTP服务失败:", err)
 	}
 }

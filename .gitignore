@@ -7,5 +7,9 @@ LEARNING_NOTES.md
 .env
 .env.*
 !.env.example
+/config.yaml
 *.log
 *.exe
+web/node_modules/
+web/dist/
+web/.npmcache/
