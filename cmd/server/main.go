@@ -12,8 +12,10 @@ import (
 	"PersonalCloudStorage/internal/user"
 	"context"
 	"log"
+	"strings"
 	"time"
 
+	"github.com/cloudwego/eino-ext/components/model/openai"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -77,6 +79,20 @@ func main() {
 		folderService,
 	)
 	fileHandler := httpapi.NewFileHandler(fileService)
+	if strings.TrimSpace(cfg.AI.BaseURL) == "" || strings.TrimSpace(cfg.AI.Model) == "" || strings.TrimSpace(cfg.AI.APIKey) == "" {
+		log.Fatal("AI 配置不完整：需要 ai.base_url、ai.model 和 ai.api_key（建议通过 AI_API_KEY 环境变量提供）")
+	}
+	chatModel, err := openai.NewChatModel(context.Background(), &openai.ChatModelConfig{
+		BaseURL: cfg.AI.BaseURL,
+		Model:   cfg.AI.Model,
+		APIKey:  cfg.AI.APIKey,
+		Timeout: 120 * time.Second,
+	})
+	if err != nil {
+		log.Fatal("创建 AI 模型失败:", err)
+	}
+	knowledgeHandler := httpapi.NewKnowledgeHandler(fileService, chatModel)
+
 	uploadRepository := upload.NewGORMRepository(db)
 	uploadService := upload.NewService(objectStorage, uploadRepository, folderService)
 	uploadHandler := httpapi.NewUploadHandler(uploadService)
@@ -104,6 +120,7 @@ func main() {
 		uploadHandler,
 		authHandler,
 		tokenManager,
+		knowledgeHandler,
 	)
 
 	if err := router.Run(cfg.Server.Addr); err != nil {

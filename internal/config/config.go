@@ -19,6 +19,7 @@ type Config struct {
 	Redis  RedisConfig  `mapstructure:"redis"`
 	MinIO  MinIOConfig  `mapstructure:"minio"`
 	JWT    JWTConfig    `mapstructure:"jwt"`
+	AI     AIConfig     `mapstructure:"ai"`
 }
 
 type ServerConfig struct {
@@ -75,6 +76,12 @@ type JWTConfig struct {
 	AccessTTL time.Duration `mapstructure:"access_ttl"`
 }
 
+type AIConfig struct {
+	BaseURL string `mapstructure:"base_url"`
+	Model   string `mapstructure:"model"`
+	APIKey  string `mapstructure:"api_key"`
+}
+
 // Load 读取非敏感 YAML，并允许环境变量覆盖或提供敏感配置。
 func Load() (Config, error) {
 	v := viper.New()
@@ -106,6 +113,7 @@ func Load() (Config, error) {
 		"jwt.secret":               "JWT_SECRET",
 		"jwt.issuer":               "JWT_ISSUER",
 		"jwt.access_ttl":           "JWT_ACCESS_TTL",
+		"ai.api_key":               "AI_API_KEY",
 	}
 	for key, env := range bindings {
 		if err := v.BindEnv(key, env); err != nil {

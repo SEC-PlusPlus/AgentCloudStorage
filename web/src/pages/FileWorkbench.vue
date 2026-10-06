@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ApiError } from '../api/client'
+import { askFile } from '../api/knowledge'
 import {
   cancelMultipartUpload, completeMultipartUpload, createFolder, deleteFolder, downloadFile, fetchFileContent, fetchTextPreview,
   getMultipartUploadProgress, getStorageUsage, listFiles, listFolders, moveFile, moveFolder,
@@ -52,6 +53,16 @@ const previewText = ref('')
 const previewLoading = ref(false)
 const previewError = ref('')
 const previewTruncated = ref(false)
+const askItem = ref<FileItem | null>(null)
+const askQuestion = ref('')
+const askAnswer = ref('')
+const askError = ref('')
+const askBusy = ref(false)
+const askDialog = ref<HTMLElement | null>(null)
+let askGeneration = 0
+let askAbort: AbortController | null = null
+let askPreviousFocus: HTMLElement | null = null
+let askPreviousBodyOverflow = ''
 let uploadAbort: AbortController | null = null
 let cancelRequested = false
 let previewGeneration = 0
@@ -280,9 +291,81 @@ function previewDescriptor(file: FileItem) {
   return previewTypes[extension]
 }
 function canPreview(file: FileItem) { return Boolean(previewDescriptor(file)) }
+function closeActionMenu(event: Event) {
+  const menu = event.currentTarget as HTMLElement
+  const details = menu.closest('details')
+  if (details) details.open = false
+}
+function canAsk(file: FileItem) { return /\.(txt|md)$/i.test(file.original_name) }
+async function openAsk(file: FileItem) {
+  if (!canAsk(file)) return
+  if (previewItem.value) closePreview()
+  if (askItem.value) closeAsk()
+  askPreviousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  askPreviousBodyOverflow = document.body.style.overflow
+  document.body.style.overflow = 'hidden'
+  askItem.value = file
+  askQuestion.value = ''
+  askAnswer.value = ''
+  askError.value = ''
+  await nextTick()
+  askDialog.value?.querySelector<HTMLTextAreaElement>('textarea')?.focus()
+}
+function closeAsk() {
+  if (!askItem.value) return
+  askGeneration++
+  askAbort?.abort()
+  askAbort = null
+  askItem.value = null
+  askBusy.value = false
+  askQuestion.value = ''
+  askAnswer.value = ''
+  askError.value = ''
+  document.body.style.overflow = askPreviousBodyOverflow
+  void nextTick(() => askPreviousFocus?.focus())
+}
+function cycleAskFocus(event: KeyboardEvent) {
+  if (event.key !== 'Tab' || !askDialog.value) return
+  const targets = Array.from(askDialog.value.querySelectorAll<HTMLElement>('button:not([disabled]), textarea:not([disabled])'))
+  if (!targets.length) return
+  const first = targets[0]
+  const last = targets[targets.length - 1]
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+}
+async function submitAsk() {
+  const file = askItem.value
+  const question = askQuestion.value.trim()
+  if (!file || askBusy.value) return
+  if (!question) { askError.value = '先输入一个问题。'; return }
+  if (file.size > 1 << 20) { askError.value = '当前只支持不超过 1 MiB 的文本文件。'; return }
+
+  const generation = ++askGeneration
+  const controller = new AbortController()
+  askAbort = controller
+  askBusy.value = true
+  askError.value = ''
+  askAnswer.value = ''
+  try {
+    const result = await askFile(file.id, question, controller.signal)
+    if (generation !== askGeneration) return
+    askAnswer.value = result.answer.trim() || '模型没有返回回答，请重试。'
+  } catch (error) {
+    if (generation !== askGeneration || controller.signal.aborted) return
+    askError.value = error instanceof ApiError && error.status === 500
+      ? '问答失败。请确认文件为较短的 UTF-8 文本，或稍后重试。'
+      : apiMessage(error)
+  } finally {
+    if (generation === askGeneration) {
+      askBusy.value = false
+      askAbort = null
+    }
+  }
+}
 async function openPreview(file: FileItem) {
   const descriptor = previewDescriptor(file)
   if (!descriptor) return
+  if (askItem.value) closeAsk()
   closePreview()
   const generation = ++previewGeneration
   previewItem.value = file
@@ -325,6 +408,7 @@ function closePreview() {
   document.body.style.overflow = previousBodyOverflow
 }
 onUnmounted(() => {
+  closeAsk()
   closePreview()
   window.clearTimeout(toastTimer)
 })
@@ -468,11 +552,10 @@ function changePage(page: number) {
   <div class="shell-content workbench" @dragover.prevent @drop="onDrop">
     <div class="workbench-heading">
       <div>
-        <div class="story-kicker"><span class="kicker-line" /> YOUR PRIVATE CLOUD</div>
         <div class="workbench-title-row"><h1>{{ title }}</h1><span class="item-count">{{ isSearching ? `${pageInfo.total} 个结果` : `${folders.length + pageInfo.total} 个项目` }}</span></div>
-        <p class="workbench-subtitle">{{ isSearching ? `文件名中包含“${appliedQuery}”` : currentFolder ? '当前文件夹' : '整理、存放和取回你的重要文件。' }}</p>
+        <p class="workbench-subtitle">{{ isSearching ? `文件名中包含“${appliedQuery}”` : currentFolder ? '此文件夹中的内容' : '你的文件，都在这里。' }}</p>
       </div>
-      <div class="usage-chip"><span>✳</span><div><small>已用空间</small><b>{{ formatSize(usage) }}</b></div></div>
+      <div class="usage-chip"><small>已使用空间</small><b>{{ formatSize(usage) }}</b></div>
     </div>
 
     <div class="workbench-toolbar">
@@ -489,30 +572,47 @@ function changePage(page: number) {
     </section>
     <div v-if="!isSearching && currentFolder" class="directory-hint"><span>◈</span> 你正在浏览 <b>{{ currentFolder.name }}</b><button type="button" @click="navigateBack()">返回上级</button></div>
     <div v-if="loading" class="loading-state"><span class="loading-orbit" />正在读取云仓…</div>
-    <div v-else-if="!folders.length && !files.length" class="empty-workspace file-empty"><div class="empty-orbit"><div class="empty-cloud">{{ isSearching ? '⌕' : '☁' }}</div><span class="pixel-spark spark-a">✦</span><span class="pixel-spark spark-b">·</span></div><span class="empty-label">{{ isSearching ? 'SEARCH / NO MATCHES' : 'YOUR CLOUD / READY' }}</span><h2>{{ emptyTitle }}</h2><p>{{ emptyCopy }}</p><button v-if="!isSearching" class="primary-action empty-upload" type="button" @click="uploadInput?.click()">↑ 上传第一个文件</button></div>
+    <div v-else-if="!folders.length && !files.length" class="empty-workspace file-empty"><div class="empty-orbit"><div class="empty-cloud">{{ isSearching ? '⌕' : '☁' }}</div></div><h2>{{ emptyTitle }}</h2><p>{{ emptyCopy }}</p><button v-if="!isSearching" class="primary-action empty-upload" type="button" @click="uploadInput?.click()">上传文件</button></div>
     <section v-else class="file-table-wrap" aria-label="文件和文件夹列表">
           <div class="file-table-head"><span>名称</span><span>大小</span><span>日期</span><span class="actions-heading">操作</span></div>
       <div v-if="folders.length" class="table-section-label">文件夹 <span>{{ folders.length }}</span></div>
       <div v-for="folder in folders" :key="`folder-${folder.id}`" class="file-row folder-row">
         <button type="button" class="entry-name" @click="openFolder(folder)"><span class="entry-glyph folder-glyph">▰</span><span class="entry-text"><b>{{ folder.name }}</b><small>文件夹</small></span></button>
         <span class="file-meta">—</span><span class="file-meta">{{ formatDate(folder.updated_at) }}</span>
-        <div class="row-actions"><button type="button" title="重命名" aria-label="重命名文件夹" @click="openDialog('rename', {kind:'folder',item:folder})">✎</button><button type="button" title="移动" aria-label="移动文件夹" @click="openDialog('move', {kind:'folder',item:folder})">↗</button><button type="button" title="删除" aria-label="删除文件夹" @click="removeEntry({kind:'folder',item:folder})">⌫</button></div>
+        <div class="row-actions"><details class="entry-more"><summary aria-label="更多文件夹操作">更多</summary><div class="entry-menu" @click="closeActionMenu"><button type="button" @click="openDialog('rename', {kind:'folder',item:folder})">重命名</button><button type="button" @click="openDialog('move', {kind:'folder',item:folder})">移动到</button><button type="button" class="danger-action" @click="removeEntry({kind:'folder',item:folder})">删除文件夹</button></div></details></div>
       </div>
       <div v-if="files.length" class="table-section-label">文件 <span>{{ files.length }}</span></div>
       <div v-for="file in files" :key="`file-${file.id}`" class="file-row">
         <div class="entry-name"><span class="entry-glyph file-glyph">{{ fileGlyph(file) }}</span><span class="entry-text"><b>{{ file.original_name }}</b><small v-if="isSearching">目录 ID · {{ file.folder_id || '根目录' }}</small><small v-else>{{ file.content_type || '未知类型' }}</small></span></div>
         <span class="file-meta">{{ formatSize(file.size) }}</span><span class="file-meta">{{ formatDate(file.created_at) }}</span>
-        <div class="row-actions"><button v-if="canPreview(file)" type="button" title="预览" aria-label="预览文件" @click="openPreview(file)">◉</button><button type="button" title="下载" aria-label="下载文件" @click="startDownload(file)">↓</button><button type="button" title="重命名" aria-label="重命名文件" @click="openDialog('rename', {kind:'file',item:file})">✎</button><button type="button" title="移动" aria-label="移动文件" @click="openDialog('move', {kind:'file',item:file})">↗</button><button type="button" title="移入回收站" aria-label="将文件移入回收站" @click="removeEntry({kind:'file',item:file})">⌫</button></div>
+        <div class="row-actions"><button v-if="canPreview(file)" type="button" @click="openPreview(file)">预览</button><button v-if="canAsk(file)" class="ask-entry-action" type="button" @click="openAsk(file)">提问</button><button type="button" @click="startDownload(file)">下载</button><details class="entry-more"><summary aria-label="更多文件操作">更多</summary><div class="entry-menu" @click="closeActionMenu"><button type="button" @click="openDialog('rename', {kind:'file',item:file})">重命名</button><button type="button" @click="openDialog('move', {kind:'file',item:file})">移动到</button><button type="button" class="danger-action" @click="removeEntry({kind:'file',item:file})">移入回收站</button></div></details></div>
       </div>
       <div v-if="pageInfo.total > pageInfo.page_size" class="pagination"><span>共 {{ pageInfo.total }} 个文件</span><div><button type="button" :disabled="pageInfo.page <= 1" @click="changePage(pageInfo.page - 1)">上一页</button><span>{{ pageInfo.page }}</span><button type="button" :disabled="pageInfo.page * pageInfo.page_size >= pageInfo.total" @click="changePage(pageInfo.page + 1)">下一页</button></div></div>
     </section>
 
-    <div class="shell-note"><span>GO</span><p>轻装上阵，稳步构建。<small>Powered by Go · Designed for your everyday files</small></p><span class="note-pixels">▰ ▱ ▰</span></div>
     <Transition name="toast"><div v-if="toastMessage" class="toast-message" role="status">✦ {{ toastMessage }}</div></Transition>
+
+    <div v-if="askItem" class="ask-backdrop" role="presentation" @click.self="closeAsk" @keydown.esc.stop.prevent="closeAsk">
+      <section ref="askDialog" class="ask-dialog" role="dialog" aria-modal="true" aria-labelledby="ask-title" tabindex="-1" @keydown="cycleAskFocus">
+        <header class="ask-header"><div><span class="ask-kicker">资料问答</span><h2 id="ask-title">向文件提问</h2><p :title="askItem.original_name">{{ askItem.original_name }}</p></div><button type="button" class="modal-close" aria-label="关闭问答" @click="closeAsk">×</button></header>
+        <div class="ask-body">
+          <p class="ask-intro">只根据这份文件回答。支持 UTF-8 的 TXT / Markdown，回答中的 [数字] 对应文件段落。</p>
+          <form class="ask-form" @submit.prevent="submitAsk">
+            <label for="ask-question">你的问题</label>
+            <textarea id="ask-question" v-model="askQuestion" maxlength="500" rows="3" placeholder="例如：这份资料的主要结论是什么？" :disabled="askBusy" />
+            <div class="ask-form-footer"><span>{{ askQuestion.length }} / 500</span><button class="primary-action" type="submit" :disabled="askBusy || !askQuestion.trim() || askItem.size > 1 << 20">{{ askBusy ? '正在阅读…' : '发送问题 →' }}</button></div>
+          </form>
+          <p v-if="askItem.size > 1 << 20" class="ask-hint" role="alert">此文件超过 1 MiB，暂不支持问答。</p>
+          <p v-if="askError" class="ask-error" role="alert">{{ askError }}</p>
+          <div v-if="askBusy" class="ask-working" role="status"><span class="loading-orbit" />正在从文件中寻找回答…</div>
+          <section v-else-if="askAnswer" class="ask-result" aria-label="文件回答"><span class="ask-result-label">基于文件的回答</span><p>{{ askAnswer }}</p><small>引用编号由模型生成，请对照原文件核查重要信息。</small></section>
+        </div>
+      </section>
+    </div>
 
     <div v-if="previewItem" class="preview-backdrop" role="presentation" @click.self="closePreview" @keydown.esc.stop.prevent="closePreview">
       <section class="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="preview-title">
-        <header class="preview-header"><div><span class="preview-kicker">FILE PREVIEW</span><h2 id="preview-title">{{ previewItem.original_name }}</h2></div><button type="button" class="modal-close" aria-label="关闭预览" @click="closePreview">×</button></header>
+        <header class="preview-header"><div><span class="preview-kicker">文件预览</span><h2 id="preview-title">{{ previewItem.original_name }}</h2></div><button type="button" class="modal-close" aria-label="关闭预览" @click="closePreview">×</button></header>
         <div v-if="previewLoading" class="preview-state" role="status">正在读取文件…</div>
         <div v-else-if="previewError" class="preview-state preview-error" role="alert"><p>{{ previewError }}</p><button class="secondary-action" type="button" @click="closePreview">关闭</button></div>
         <template v-else>
@@ -527,7 +627,6 @@ function changePage(page: number) {
     <div v-if="dialog" class="modal-backdrop" role="presentation" @click.self="closeDialog" @keydown.esc.stop.prevent="closeDialog">
       <section ref="modalElement" class="action-modal" role="dialog" aria-modal="true" aria-labelledby="dialog-title" tabindex="-1" @keydown="cycleDialogFocus">
         <button class="modal-close" type="button" aria-label="关闭对话框" @click="closeDialog">×</button>
-        <div class="story-kicker"><span class="kicker-line" /> CLOUD ACTION</div>
         <h2 id="dialog-title">{{ dialog.action === 'create' ? '创建文件夹' : dialog.action === 'rename' ? '重命名' : '移动到' }}</h2>
         <form @submit.prevent="confirmDialog">
           <label v-if="dialog.action !== 'move'" class="field"><span>{{ dialog.action === 'create' ? '文件夹名称' : '新名称' }}</span><input v-model="dialogValue" maxlength="255" required :placeholder="dialog.action === 'create' ? '例如：旅行照片' : '输入新名称'" /></label>

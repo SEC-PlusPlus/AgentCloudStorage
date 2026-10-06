@@ -3,6 +3,7 @@ import App from './App.vue'
 import { router } from './router'
 import './style.css'
 import './workbench.css'
+import './workspace-light.css'
 
 createApp(App).use(router).mount('#app')
 window.addEventListener('acs:unauthorized', () => {
