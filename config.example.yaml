@@ -6,8 +6,8 @@ server:
 mysql:
   host: 127.0.0.1
   port: 3307
-  user: govault
-  database: govault
+  user: xxx
+  database: xxx
   max_open_conns: 20
   max_idle_conns: 10
   conn_max_idle_time: 30m
@@ -18,9 +18,13 @@ redis:
 
 minio:
   endpoint: 127.0.0.1:9000
-  bucket: govault
+  bucket: xxx
   use_ssl: false
 
 jwt:
   issuer: govault
   access_ttl: 2h
+ai:
+  base_url: https://open.bigmodel.cn/api/paas/v4
+  model: glm-5.3-flash
+  api_key: xxx
