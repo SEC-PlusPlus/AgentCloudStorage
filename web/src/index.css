@@ -1,0 +1,8 @@
+@import "tailwindcss";
+@import "@glinui/tokens/theme.css";
+
+html,
+body,
+#root {
+  height: 100%;
+}
