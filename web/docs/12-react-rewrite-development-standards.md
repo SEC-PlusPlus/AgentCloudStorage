@@ -75,4 +75,4 @@
 
 ## 11. 素材
 
-- 禁 AI 生成；只用网络现存设计，许可证限 MIT/CC0/CC-BY（CC-BY 须署名）；每个素材登记 `asset-credits.md`。
+- 禁 AI 生成；只用网络现存设计，许可证限 MIT/ISC/CC0/CC-BY（CC-BY 须署名）；每个素材登记 `asset-credits.md`。

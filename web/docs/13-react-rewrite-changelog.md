@@ -4,4 +4,4 @@
 
 | 日期 | commit | 任务 | 摘要 | spec 节 | 测试证据 |
 |---|---|---|---|---|---|
-| 2026-11-18 | 58dbca0 + 本 feat/docs 两 commit | Task 1 分支/骨架/治理文档/素材候选 | 建 `feat/react-glinui-rewrite` 分支；删除 Vue 前端源码（`git rm`，历史保留于 adbcfba）；Vite react-ts 骨架 + Tailwind v4 + `@glinui/tokens`；tsconfig `paths @/*` + vite alias；vitest(jsdom)+test-setup+smoke 测试；新增开发规范、本追踪表、asset-credits（3 个 logo 候选待用户确认） | §3、§4、§7.1 | `npm run build` 零错误；`npm test -- --run` 2 passed（smoke：表达式 + jsdom 环境断言） |
+| 2026-11-18 | Task 1 (58dbca0..HEAD) | Task 1 分支/骨架/治理文档/素材候选 | 建 `feat/react-glinui-rewrite` 分支；删除 Vue 前端源码（`git rm`，历史保留于 adbcfba）；Vite react-ts 骨架 + Tailwind v4 + `@glinui/tokens`；tsconfig `paths @/*` + vite alias；vitest(jsdom)+test-setup+smoke 测试；新增开发规范、本追踪表、asset-credits（3 个 logo 候选待用户确认） | §3、§4、§7.1 | `npm run build` 零错误；`npm test -- --run` 3 passed（smoke：表达式 + jsdom 环境 + @/App 别名解析） |
