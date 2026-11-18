@@ -1,7 +1,7 @@
 # 前端重写设计方案：React + Glin UI（液态玻璃）
 
 日期：2026-11-18
-状态：**最终版 v2**（builder-check 已吸收；剩 1 个待确认问题，见 §10）
+状态：**最终版 v2.1**（全部决定已确认，可进入实施计划）
 作者：Claude（与用户对话整理 + 独立评审员复核）
 
 ## 1. 意图与动机
@@ -14,7 +14,7 @@
 2. **土拨鼠场景图保留**（`cloud-gopher-pixel.png`  mascot 图 + `StorageScene` 动画场景移植到 React）
 3. **所有 logo/品牌素材禁止 AI 生成，必须采用网络上现存设计**（开放授权素材，来源与许可证登记在案）
 
-后端功能逻辑**完全不动**（§10 遗留问题的选项 A 是唯一例外，涉及一行接口响应字段）。功能范围与现有前端 1:1 平移，不新增功能。
+后端仅一处微调（用户 2026-11-18 确认）：`/api/v1/storage/usage` 响应新增 `quota_bytes` 字段；其余功能逻辑**完全不动**。功能范围与现有前端 1:1 平移，不新增功能。
 
 ## 2. 目标 / 非目标 / 反目标
 
@@ -99,7 +99,7 @@ web/src/
   - 导航区：`全部文件`（Home）、`回收站`、`搜索`（唤起 `command` 命令面板，走 files/search 接口）
   - 动作区（分隔线后）：`上传`（触发隐藏 file picker）、`新建文件夹`（modal）
   - 账户区（分隔线后）：`用户`（头像图标 → `dropdown-menu`：主题切换、退出登录）
-- **顶部细条 `glass-navbar`**：左侧品牌（BrandMark + 应用名，§7.1），中间 `glass-breadcrumb` 路径，右侧存储用量显示（形态待 §10 确认）
+- **顶部细条 `glass-navbar`**：左侧品牌（BrandMark + 应用名，§7.1），中间 `glass-breadcrumb` 路径，右侧存储用量 `progress` 条（已用 / `quota_bytes`，bytes 格式化）
 - 固定背景层（`aurora-background` + `dot-pattern`），玻璃表面从它取折射模糊；内容区全宽，无侧边栏
 - `toast`（sonner）全局挂载，位置右上（避开底部 dock）
 
@@ -146,7 +146,7 @@ web/src/
 | `/api/v1/files/{id}/restore` | POST | 恢复 |
 | `/api/v1/trash?page` | GET | 回收站列表 |
 | `/api/v1/trash/{id}` | DELETE | 永久删除 |
-| `/api/v1/storage/usage` | GET | 已用字节（**响应形态待 §10 确认**） |
+| `/api/v1/storage/usage` | GET | 已用字节；响应**新增 `quota_bytes`**（后端唯一改动，已确认） |
 | `/api/v1/knowledge/ask` | POST | 文件问答（AbortSignal） |
 
 分片上传策略不变：超 50MiB 走分片 → start → 按 `part_size` 切片 → 并发 3–4（旧版顺序上传，提速属布局重设计内的改良——我的判断）→ complete；失败任务凭 `uploaded_parts` 续传。
@@ -180,7 +180,7 @@ TanStack Query key：`['files',folderId,page]`、`['folders',parentId]`、`['tra
 
 1. **素材与骨架**：asset-credits 候选筛选（logo 交用户确认）→ Vite/React/Tailwind4/TanStack/router 骨架 → 从注册表 vendor 首批组件（button、input、glass-card、modal、table、dropdown-menu、dock、navbar、breadcrumb、toast 等）+ 依赖补装 → api 层移植（含全部错误映射）与 auth store
 2. 登录页（土拨鼠 hero）
-3. 外壳（dock + navbar + 面包屑解析）+ 文件列表（浏览/分页/搜索）
+3. 外壳（dock + navbar + 面包屑解析）+ 文件列表（浏览/分页/搜索）；含后端 `quota_bytes` 一处改动
 4. 上传（直传 + 分片 + 队列 + 拖拽 + 续传）
 5. 操作集（建/改名/移动/删除 + context-menu + 选择浮条）
 6. 预览 sheet + 下载
@@ -192,13 +192,7 @@ TanStack Query key：`['files',folderId,page]`、`['folders',parentId]`、`['tra
 
 **已决（用户，2026-11-18）**：底部 `glass-dock` 导航；土拨鼠场景图保留；logo/素材不 AI、取网络现存设计；接受毛玻璃（非真折射）视觉体系；组件库 = Glin UI（vendor 获取方式为实现细节，归我的判断）。
 
-**遗留问题（唯一待用户回答）**：
-
-存储用量显示的形态——`/api/v1/storage/usage` 只返回 `{used_bytes}`，配额 `quota_bytes` 在后端数据库里（默认 1 GiB，可按用户不同）。三个选项：
-
-- **A（推荐）**：后端 usage 响应**加一个字段** `quota_bytes`（一行改动），前端做完整 `progress` 容量条。唯一突破"后端不动"的点
-- **B**：后端不动，沿用旧版"已用 XXX MB"chip（诚实但无进度感）
-- **C**：后端不动，前端把配额写死 1 GiB 画条（配额一旦被管理员改动就会**说谎**，不推荐）
+**已决（用户，2026-11-18，原遗留问题）**：存储用量显示取方案 A——`storageUsageResponse` 增加 `quota_bytes`（来自 users 表配额列），前端画完整容量条。后端配套改动仅此一处（handler + 相应测试），列入 §9 第 3 步。
 
 ## 11. 留给实施者的自由度
 
