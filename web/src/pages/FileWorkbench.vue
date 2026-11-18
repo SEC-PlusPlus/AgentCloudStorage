@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessageBox } from 'element-plus'
+import { FolderAdd, FolderOpened, MoreFilled, Search, Upload } from '@element-plus/icons-vue'
 import { ApiError } from '../api/client'
 import { askFile } from '../api/knowledge'
 import {
@@ -270,7 +272,9 @@ async function removeEntry(entry: Entry) {
   const prompt = entry.kind === 'file'
     ? `将“${entry.item.original_name}”移入回收站？`
     : `删除文件夹“${entry.item.name}”？该操作仅能删除空文件夹。`
-  if (!window.confirm(prompt)) return
+  try {
+    await ElMessageBox.confirm(prompt, '请确认操作', { confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning' })
+  } catch { return }
   busy.value = true
   try {
     if (entry.kind === 'file') await trashFile(entry.item.id)
@@ -291,10 +295,15 @@ function previewDescriptor(file: FileItem) {
   return previewTypes[extension]
 }
 function canPreview(file: FileItem) { return Boolean(previewDescriptor(file)) }
-function closeActionMenu(event: Event) {
-  const menu = event.currentTarget as HTMLElement
-  const details = menu.closest('details')
-  if (details) details.open = false
+function folderCommand(command: string, folder: FolderItem) {
+  const entry: Entry = { kind: 'folder', item: folder }
+  if (command === 'rename' || command === 'move') void openDialog(command, entry)
+  if (command === 'delete') void removeEntry(entry)
+}
+function fileCommand(command: string, file: FileItem) {
+  const entry: Entry = { kind: 'file', item: file }
+  if (command === 'rename' || command === 'move') void openDialog(command, entry)
+  if (command === 'delete') void removeEntry(entry)
 }
 function canAsk(file: FileItem) { return /\.(txt|md)$/i.test(file.original_name) }
 async function openAsk(file: FileItem) {
@@ -560,47 +569,47 @@ function changePage(page: number) {
 
     <div class="workbench-toolbar">
       <div class="crumbs"><button v-if="folderStack.length" type="button" class="back-button" aria-label="返回上级目录" @click="navigateBack()">←</button><button type="button" :class="{ 'crumb-current': !currentFolder && !isSearching }" @click="clearSearch">根目录</button><template v-for="(folder, index) in folderStack" :key="folder.id"><i>/</i><button type="button" :class="{ 'crumb-current': index === folderStack.length - 1 }" @click="navigateBack(index)">{{ folder.name }}</button></template><template v-if="isSearching"><i>/</i><span class="crumb-current">搜索</span></template></div>
-      <form class="search-box" role="search" @submit.prevent="submitSearch"><span>⌕</span><input v-model="queryText" aria-label="搜索文件名" placeholder="搜索文件名…" /><button v-if="queryText" type="button" aria-label="清空搜索" @click="clearSearch">×</button><kbd>↵</kbd></form>
-      <div class="toolbar-actions"><button class="secondary-action" type="button" :disabled="busy || isSearching" @click="openDialog('create')"><span>＋</span> 新建文件夹</button><button class="primary-action" type="button" :disabled="busy || isSearching" @click="uploadInput?.click()"><span>↑</span> 上传文件</button><input ref="uploadInput" type="file" multiple hidden @change="uploadSelection" /></div>
+      <form class="search-box" role="search" @submit.prevent="submitSearch"><el-input v-model="queryText" clearable aria-label="搜索文件名" placeholder="搜索文件名" @clear="clearSearch"><template #prefix><el-icon><Search /></el-icon></template></el-input><button type="submit" class="search-submit" aria-label="搜索">搜索</button></form>
+      <div class="toolbar-actions"><el-button class="secondary-action" :icon="FolderAdd" :disabled="busy || isSearching" @click="openDialog('create')">新建文件夹</el-button><el-button class="primary-action" type="primary" :icon="Upload" :disabled="busy || isSearching" @click="uploadInput?.click()">上传文件</el-button><input ref="uploadInput" type="file" multiple hidden @change="uploadSelection" /></div>
     </div>
 
-    <div v-if="errorMessage" class="inline-error" role="alert"><span>!</span>{{ errorMessage }}<button type="button" aria-label="关闭错误提示" @click="errorMessage = ''">×</button></div>
+    <el-alert v-if="errorMessage" class="inline-error" :title="errorMessage" type="error" show-icon closable role="alert" @close="errorMessage = ''" />
     <section v-if="uploadTask" class="upload-progress" aria-live="polite" aria-label="上传进度">
       <div class="upload-progress-heading"><div><b>{{ uploadTask.name }}</b><small>{{ uploadTask.status }}</small></div><strong>{{ uploadTask.percent }}%</strong></div>
-      <progress :value="uploadTask.percent" max="100" />
-      <button v-if="activeSessionID || uploadTask" type="button" class="cancel-upload" @click="cancelCurrentUpload">取消上传</button>
+      <el-progress :percentage="uploadTask.percent" :stroke-width="7" :show-text="false" />
+      <el-button v-if="activeSessionID || uploadTask" type="danger" text class="cancel-upload" @click="cancelCurrentUpload">取消上传</el-button>
     </section>
     <div v-if="!isSearching && currentFolder" class="directory-hint"><span>◈</span> 你正在浏览 <b>{{ currentFolder.name }}</b><button type="button" @click="navigateBack()">返回上级</button></div>
     <div v-if="loading" class="loading-state"><span class="loading-orbit" />正在读取云仓…</div>
-    <div v-else-if="!folders.length && !files.length" class="empty-workspace file-empty"><div class="empty-orbit"><div class="empty-cloud">{{ isSearching ? '⌕' : '☁' }}</div></div><h2>{{ emptyTitle }}</h2><p>{{ emptyCopy }}</p><button v-if="!isSearching" class="primary-action empty-upload" type="button" @click="uploadInput?.click()">上传文件</button></div>
+    <div v-else-if="!folders.length && !files.length" class="empty-workspace file-empty"><el-empty :description="emptyTitle"><p>{{ emptyCopy }}</p><el-button v-if="!isSearching" type="primary" class="empty-upload" @click="uploadInput?.click()">上传文件</el-button></el-empty></div>
     <section v-else class="file-table-wrap" aria-label="文件和文件夹列表">
           <div class="file-table-head"><span>名称</span><span>大小</span><span>日期</span><span class="actions-heading">操作</span></div>
       <div v-if="folders.length" class="table-section-label">文件夹 <span>{{ folders.length }}</span></div>
       <div v-for="folder in folders" :key="`folder-${folder.id}`" class="file-row folder-row">
-        <button type="button" class="entry-name" @click="openFolder(folder)"><span class="entry-glyph folder-glyph">▰</span><span class="entry-text"><b>{{ folder.name }}</b><small>文件夹</small></span></button>
+        <button type="button" class="entry-name" @click="openFolder(folder)"><span class="entry-glyph folder-glyph"><el-icon><FolderOpened /></el-icon></span><span class="entry-text"><b>{{ folder.name }}</b><small>文件夹</small></span></button>
         <span class="file-meta">—</span><span class="file-meta">{{ formatDate(folder.updated_at) }}</span>
-        <div class="row-actions"><details class="entry-more"><summary aria-label="更多文件夹操作">更多</summary><div class="entry-menu" @click="closeActionMenu"><button type="button" @click="openDialog('rename', {kind:'folder',item:folder})">重命名</button><button type="button" @click="openDialog('move', {kind:'folder',item:folder})">移动到</button><button type="button" class="danger-action" @click="removeEntry({kind:'folder',item:folder})">删除文件夹</button></div></details></div>
+        <div class="row-actions"><el-dropdown trigger="click" @command="folderCommand($event, folder)"><el-button text :icon="MoreFilled" aria-label="更多文件夹操作">更多</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item command="rename">重命名</el-dropdown-item><el-dropdown-item command="move">移动到</el-dropdown-item><el-dropdown-item command="delete" divided>删除文件夹</el-dropdown-item></el-dropdown-menu></template></el-dropdown></div>
       </div>
       <div v-if="files.length" class="table-section-label">文件 <span>{{ files.length }}</span></div>
       <div v-for="file in files" :key="`file-${file.id}`" class="file-row">
         <div class="entry-name"><span class="entry-glyph file-glyph">{{ fileGlyph(file) }}</span><span class="entry-text"><b>{{ file.original_name }}</b><small v-if="isSearching">目录 ID · {{ file.folder_id || '根目录' }}</small><small v-else>{{ file.content_type || '未知类型' }}</small></span></div>
         <span class="file-meta">{{ formatSize(file.size) }}</span><span class="file-meta">{{ formatDate(file.created_at) }}</span>
-        <div class="row-actions"><button v-if="canPreview(file)" type="button" @click="openPreview(file)">预览</button><button v-if="canAsk(file)" class="ask-entry-action" type="button" @click="openAsk(file)">提问</button><button type="button" @click="startDownload(file)">下载</button><details class="entry-more"><summary aria-label="更多文件操作">更多</summary><div class="entry-menu" @click="closeActionMenu"><button type="button" @click="openDialog('rename', {kind:'file',item:file})">重命名</button><button type="button" @click="openDialog('move', {kind:'file',item:file})">移动到</button><button type="button" class="danger-action" @click="removeEntry({kind:'file',item:file})">移入回收站</button></div></details></div>
+        <div class="row-actions"><el-button v-if="canPreview(file)" text @click="openPreview(file)">预览</el-button><el-button v-if="canAsk(file)" text class="ask-entry-action" @click="openAsk(file)">提问</el-button><el-button text @click="startDownload(file)">下载</el-button><el-dropdown trigger="click" @command="fileCommand($event, file)"><el-button text :icon="MoreFilled" aria-label="更多文件操作">更多</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item command="rename">重命名</el-dropdown-item><el-dropdown-item command="move">移动到</el-dropdown-item><el-dropdown-item command="delete" divided>移入回收站</el-dropdown-item></el-dropdown-menu></template></el-dropdown></div>
       </div>
-      <div v-if="pageInfo.total > pageInfo.page_size" class="pagination"><span>共 {{ pageInfo.total }} 个文件</span><div><button type="button" :disabled="pageInfo.page <= 1" @click="changePage(pageInfo.page - 1)">上一页</button><span>{{ pageInfo.page }}</span><button type="button" :disabled="pageInfo.page * pageInfo.page_size >= pageInfo.total" @click="changePage(pageInfo.page + 1)">下一页</button></div></div>
+      <div v-if="pageInfo.total > pageInfo.page_size" class="pagination"><span>共 {{ pageInfo.total }} 个文件</span><el-pagination :current-page="pageInfo.page" :page-size="pageInfo.page_size" :total="pageInfo.total" layout="prev, pager, next" background @current-change="changePage" /></div>
     </section>
 
     <Transition name="toast"><div v-if="toastMessage" class="toast-message" role="status">✦ {{ toastMessage }}</div></Transition>
 
     <div v-if="askItem" class="ask-backdrop" role="presentation" @click.self="closeAsk" @keydown.esc.stop.prevent="closeAsk">
       <section ref="askDialog" class="ask-dialog" role="dialog" aria-modal="true" aria-labelledby="ask-title" tabindex="-1" @keydown="cycleAskFocus">
-        <header class="ask-header"><div><span class="ask-kicker">资料问答</span><h2 id="ask-title">向文件提问</h2><p :title="askItem.original_name">{{ askItem.original_name }}</p></div><button type="button" class="modal-close" aria-label="关闭问答" @click="closeAsk">×</button></header>
+        <header class="ask-header"><div><span class="ask-kicker">资料问答</span><h2 id="ask-title">向文件提问</h2><p :title="askItem.original_name">{{ askItem.original_name }}</p></div><el-button text class="modal-close" aria-label="关闭问答" @click="closeAsk">×</el-button></header>
         <div class="ask-body">
           <p class="ask-intro">只根据这份文件回答。支持 UTF-8 的 TXT / Markdown，回答中的 [数字] 对应文件段落。</p>
           <form class="ask-form" @submit.prevent="submitAsk">
             <label for="ask-question">你的问题</label>
-            <textarea id="ask-question" v-model="askQuestion" maxlength="500" rows="3" placeholder="例如：这份资料的主要结论是什么？" :disabled="askBusy" />
-            <div class="ask-form-footer"><span>{{ askQuestion.length }} / 500</span><button class="primary-action" type="submit" :disabled="askBusy || !askQuestion.trim() || askItem.size > 1 << 20">{{ askBusy ? '正在阅读…' : '发送问题 →' }}</button></div>
+            <el-input id="ask-question" v-model="askQuestion" type="textarea" :maxlength="500" :rows="3" placeholder="例如：这份资料的主要结论是什么？" :disabled="askBusy" />
+            <div class="ask-form-footer"><span>{{ askQuestion.length }} / 500</span><el-button class="primary-action" type="primary" native-type="submit" :loading="askBusy" :disabled="!askQuestion.trim() || askItem.size > 1 << 20">发送问题</el-button></div>
           </form>
           <p v-if="askItem.size > 1 << 20" class="ask-hint" role="alert">此文件超过 1 MiB，暂不支持问答。</p>
           <p v-if="askError" class="ask-error" role="alert">{{ askError }}</p>
@@ -612,9 +621,9 @@ function changePage(page: number) {
 
     <div v-if="previewItem" class="preview-backdrop" role="presentation" @click.self="closePreview" @keydown.esc.stop.prevent="closePreview">
       <section class="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="preview-title">
-        <header class="preview-header"><div><span class="preview-kicker">文件预览</span><h2 id="preview-title">{{ previewItem.original_name }}</h2></div><button type="button" class="modal-close" aria-label="关闭预览" @click="closePreview">×</button></header>
+        <header class="preview-header"><div><span class="preview-kicker">文件预览</span><h2 id="preview-title">{{ previewItem.original_name }}</h2></div><el-button text class="modal-close" aria-label="关闭预览" @click="closePreview">×</el-button></header>
         <div v-if="previewLoading" class="preview-state" role="status">正在读取文件…</div>
-        <div v-else-if="previewError" class="preview-state preview-error" role="alert"><p>{{ previewError }}</p><button class="secondary-action" type="button" @click="closePreview">关闭</button></div>
+        <div v-else-if="previewError" class="preview-state preview-error" role="alert"><p>{{ previewError }}</p><el-button @click="closePreview">关闭</el-button></div>
         <template v-else>
           <p v-if="previewTruncated" class="preview-notice">文本较长，仅显示前 2 MiB。</p>
           <img v-if="previewKind === 'image' && previewURL" class="preview-image" :src="previewURL" :alt="previewItem.original_name" />
@@ -626,13 +635,13 @@ function changePage(page: number) {
 
     <div v-if="dialog" class="modal-backdrop" role="presentation" @click.self="closeDialog" @keydown.esc.stop.prevent="closeDialog">
       <section ref="modalElement" class="action-modal" role="dialog" aria-modal="true" aria-labelledby="dialog-title" tabindex="-1" @keydown="cycleDialogFocus">
-        <button class="modal-close" type="button" aria-label="关闭对话框" @click="closeDialog">×</button>
+        <el-button text class="modal-close" aria-label="关闭对话框" @click="closeDialog">×</el-button>
         <h2 id="dialog-title">{{ dialog.action === 'create' ? '创建文件夹' : dialog.action === 'rename' ? '重命名' : '移动到' }}</h2>
         <form @submit.prevent="confirmDialog">
-          <label v-if="dialog.action !== 'move'" class="field"><span>{{ dialog.action === 'create' ? '文件夹名称' : '新名称' }}</span><input v-model="dialogValue" maxlength="255" required :placeholder="dialog.action === 'create' ? '例如：旅行照片' : '输入新名称'" /></label>
-          <label v-else class="field"><span>目标文件夹</span><select v-model.number="targetID"><option v-for="target in folderTargets" :key="target.id" :value="target.id">{{ target.label }}</option></select></label>
+          <label v-if="dialog.action !== 'move'" class="field"><span>{{ dialog.action === 'create' ? '文件夹名称' : '新名称' }}</span><el-input v-model="dialogValue" maxlength="255" :placeholder="dialog.action === 'create' ? '例如：旅行照片' : '输入新名称'" /></label>
+          <label v-else class="field"><span>目标文件夹</span><el-select v-model="targetID" :teleported="false" placeholder="选择目标文件夹"><el-option v-for="target in folderTargets" :key="target.id" :label="target.label" :value="target.id" /></el-select></label>
           <p v-if="errorMessage" class="form-message error" role="alert">{{ errorMessage }}</p>
-          <div class="modal-actions"><button class="secondary-action" type="button" @click="closeDialog">取消</button><button class="primary-action" type="submit" :disabled="busy">{{ busy ? '处理中…' : '确认' }}</button></div>
+          <div class="modal-actions"><el-button @click="closeDialog">取消</el-button><el-button type="primary" native-type="submit" :loading="busy" :disabled="dialog.action !== 'move' && !dialogValue.trim()">确认</el-button></div>
         </form>
       </section>
     </div>

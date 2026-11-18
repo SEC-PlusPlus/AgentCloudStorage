@@ -1,9 +1,11 @@
 <template>
-  <div class="brand-mark" aria-hidden="true">
+  <span class="brand-mark" aria-hidden="true">
     <svg viewBox="0 0 40 40" fill="none">
-      <path d="M11 29.5h18.3a6.2 6.2 0 0 0 .4-12.4A10 10 0 0 0 10.4 19 5.3 5.3 0 0 0 11 29.5Z" fill="currentColor" opacity=".18" />
-      <path d="M11 29.5h18.3a6.2 6.2 0 0 0 .4-12.4A10 10 0 0 0 10.4 19 5.3 5.3 0 0 0 11 29.5Z" stroke="currentColor" stroke-width="2.5" />
-      <path d="m16 23 3 3 6-7" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+      <rect x="10.5" y="7.5" width="21" height="24" rx="5.5" stroke="currentColor" stroke-width="2.3" opacity=".46" />
+      <path d="M8.5 13.5h18a5 5 0 0 1 5 5v10a4 4 0 0 1-4 4h-19a4 4 0 0 1-4-4v-11a4 4 0 0 1 4-4Z" fill="currentColor" opacity=".12" />
+      <path d="M8.5 13.5h18a5 5 0 0 1 5 5v10a4 4 0 0 1-4 4h-19a4 4 0 0 1-4-4v-11a4 4 0 0 1 4-4Z" stroke="currentColor" stroke-width="2.3" />
+      <path d="M11 21h13M11 26h9" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" />
+      <circle cx="28" cy="11" r="2.5" fill="currentColor" />
     </svg>
-  </div>
+  </span>
 </template>

@@ -4,6 +4,7 @@ import { router } from './router'
 import './style.css'
 import './workbench.css'
 import './workspace-light.css'
+import './element-refresh.css'
 
 createApp(App).use(router).mount('#app')
 window.addEventListener('acs:unauthorized', () => {
