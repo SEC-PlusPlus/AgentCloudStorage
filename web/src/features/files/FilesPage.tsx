@@ -8,10 +8,25 @@
 // （file_handler.go:185-238），这不是空目录——落定后 replace 回最后有效页，历史不留死页。
 // Task 8 追加：工具栏「上传文件」入口 + 拖放上传（DropOverlay 仅浏览模式挂载——旧 FileWorkbench
 // onDrop 的 `if (isSearching...) return` 等价且更强：搜索态连遮罩视觉都不出现；投放目录=当前 ?folder=）。
-import { useEffect } from 'react'
+// Task 9 追加：操作集接线——Task 7 的三条回调缝全部接实：onSelectionChange→浮动操作条（RowToolbar）、
+// onContext→右键菜单（RowContextMenu，隐藏锚点+合成事件开菜单）；重命名/移动/回收站确认三弹窗挂载本页，
+// 失效经 actions.computeInvalidations → applyInvalidations（成功 toast + 错误中文透传双载体，弹窗内
+// errorMessage 载具按评审裁定换为 sonner toast）。旧版行内「更多」下拉的职责由右键菜单承接。
+import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
+import { toast } from 'sonner'
 import { Alert, AlertDescription, AlertTitle } from '@/components/glinui/components/alert'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/glinui/components/alert-dialog'
 import { Badge } from '@/components/glinui/components/badge'
 import { Button } from '@/components/glinui/components/button'
 import { DropOverlay } from '@/components/app/DropOverlay'
@@ -19,10 +34,29 @@ import { Empty } from '@/components/app/Empty'
 import { Pagination } from '@/components/app/Pagination'
 import { folderIdFromLocation } from '@/components/app/TopBar'
 import { ApiError } from '@/api/client'
+import { deleteFolder, downloadFile, trashFile, type FileItem } from '@/api/storage'
 import { isUsableTrail, navTrailKey, setTrail } from '@/features/files/crumbs'
+import { applyInvalidations, computeInvalidations, mutationErrorMessage } from './actions'
+import { MoveDialog } from './MoveDialog'
+import { RenameDialog } from './RenameDialog'
+import { RowContextMenu } from './RowContextMenu'
+import { RowToolbar } from './RowToolbar'
 import { useUploadManager } from './useUploadManager'
 import { FilesTable } from './FilesTable'
 import { useFileRows } from './useFileRows'
+import type { FileRow } from './useFileRows'
+
+/** 回收站确认弹窗文案（旧 removeEntry 原文逐字；多选为新版能力，文案新拟）。 */
+function formatDeleteCopy(rows: FileRow[] | null): string {
+  if (!rows || rows.length === 0) return ''
+  const [only] = rows
+  if (rows.length === 1 && only) {
+    return only.kind === 'file'
+      ? `将“${only.name}”移入回收站？`
+      : `删除文件夹“${only.name}”？该操作仅能删除空文件夹。`
+  }
+  return `将 ${rows.length} 个项目移入回收站？文件夹需为空才能删除。`
+}
 
 function parsePage(raw: string | null): number {
   const parsed = Number(raw ?? 1)
@@ -41,6 +75,13 @@ export function FilesPage() {
   const page = parsePage(searchParams.get('page'))
 
   const state = useFileRows(folderId, page, keyword)
+
+  // Task 9 操作集状态：勾选集合（浮条消费）、右键目标+坐标（菜单消费）、三个待办弹窗的行参数。
+  const [selection, setSelection] = useState<FileRow[]>([])
+  const [contextMenu, setContextMenu] = useState<{ row: FileRow; pos: { x: number; y: number } } | null>(null)
+  const [renameTarget, setRenameTarget] = useState<FileRow | null>(null)
+  const [moveTarget, setMoveTarget] = useState<FileRow | null>(null)
+  const [deleteTargets, setDeleteTargets] = useState<FileRow[] | null>(null)
 
   // 越页兜底（Important #1）：后端越页返回 200+空 items + 真实 total——空 rows≠空目录。
   // 落定后 replace 到最后一有效页（total=0 不钳位：那是真空态，Empty 负责）。
@@ -73,6 +114,50 @@ export function FilesPage() {
     if (next <= 1) params.delete('page')
     else params.set('page', String(next))
     setSearchParams(params)
+  }
+
+  // 下载：旧 startDownload 语义（busy 锁由 pending 天然覆盖——fetch 完成即 toast）；
+  // 多选=逐个文件（仅文件行，浮条过滤后传入）。emoji/unicode 文件名原样保留=downloadFile 锚点法
+  // （storage.ts:120-130 仅读 id/original_name——此处收窄 cast 仅携两字段，理由注释随行为）。
+  const runDownload = async (rows: FileRow[]) => {
+    for (const row of rows) {
+      if (row.kind !== 'file') continue
+      try {
+        await downloadFile({ id: row.id, original_name: row.name } as FileItem)
+      } catch (error) {
+        toast.error(mutationErrorMessage(error))
+        return
+      }
+    }
+    if (rows.some((row) => row.kind === 'file')) toast('下载已开始。') // 旧文案
+  }
+
+  // 移入回收站/删除文件夹：旧 removeEntry 语义（确认后执行、成功 toast、错误中文透传）。
+  // 多选=顺序逐个，首个错误文案上抛但其余继续（新能力，无旧对照；invalidate 一次）。
+  const runTrash = async (rows: FileRow[]) => {
+    let ok = 0
+    let firstError: string | null = null
+    for (const row of rows) {
+      try {
+        if (row.kind === 'file') await trashFile(row.id)
+        else await deleteFolder(row.id)
+        ok += 1
+      } catch (error) {
+        firstError ??= mutationErrorMessage(error)
+      }
+    }
+    applyInvalidations(queryClient, computeInvalidations({ type: 'trash', fromFolder: folderId }, folderId))
+    const [only] = rows
+    if (ok > 0) {
+      toast(
+        rows.length === 1 && only
+          ? only.kind === 'file'
+            ? '文件已移入回收站。'
+            : '文件夹已删除。'
+          : `已移入回收站 ${ok} 个项目。`,
+      )
+    }
+    if (firstError) toast.error(firstError)
   }
 
   return (
@@ -132,6 +217,8 @@ export function FilesPage() {
             rows={state.rows}
             loading={state.isLoading}
             onFolderOpen={(row) => handleFolderOpen(row.id, row.name, row.kind)}
+            onSelectionChange={setSelection}
+            onContext={(row, pos) => setContextMenu({ row, pos })}
           />
           {!state.isLoading && state.total > 0 ? (
             <Pagination
@@ -148,6 +235,52 @@ export function FilesPage() {
       {!state.keywordMode ? (
         <DropOverlay onFiles={(files) => uploadManager.submitFiles(files, folderId)} />
       ) : null}
+
+      {/* —— Task 9 操作集：浮条 / 右键菜单 / 三弹窗（勾选跨页清空由 FilesTable 缝上抛 [] 保证） —— */}
+      <RowToolbar
+        selection={selection}
+        onDownload={() => void runDownload(selection)}
+        onMove={() => {
+          const [only] = selection
+          if (selection.length === 1 && only) setMoveTarget(only)
+        }}
+        onRename={() => {
+          const [only] = selection
+          if (selection.length === 1 && only) setRenameTarget(only)
+        }}
+        onTrash={() => setDeleteTargets(selection)}
+        onAsk={() => undefined} // 浮条问 AI 按钮恒 disabled；Task 12 接线时改实
+      />
+      <RowContextMenu
+        row={contextMenu?.row ?? null}
+        pos={contextMenu?.pos ?? null}
+        onClose={() => setContextMenu(null)}
+        onPreview={() => undefined} // TODO(Task 10 预览接线)
+        onDownload={(row) => void runDownload([row])}
+        onRename={setRenameTarget}
+        onMove={setMoveTarget}
+        onTrash={(row) => setDeleteTargets([row])}
+        onAsk={() => undefined} // 菜单项 disabled 至 Task 12
+      />
+      <RenameDialog target={renameTarget} onClose={() => setRenameTarget(null)} />
+      <MoveDialog target={moveTarget} onClose={() => setMoveTarget(null)} />
+      <AlertDialog
+        open={deleteTargets !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTargets(null)
+        }}
+      >
+        <AlertDialogContent variant="glass" size="sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>请确认操作</AlertDialogTitle>
+            <AlertDialogDescription>{formatDeleteCopy(deleteTargets)}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void runTrash(deleteTargets ?? [])}>确认</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

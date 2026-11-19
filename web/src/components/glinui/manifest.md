@@ -55,3 +55,18 @@ sonner（已有）继续由 Task 4 的 Toaster 直挂；`toast` 为 Radix 版组
 ## 验证快照（最终提交态，无 @glinui/ui）
 
 - `npm run build` 零错误；`npm test -- --run` **64 passed**（基线不劣化）
+
+## Task 9 追加段（控制端批准的 spec §11 偏差路线）
+
+- **新装 runtime 依赖**：`@radix-ui/react-context-menu ^2.4.1`（package.json dependencies + lockfile 实装）——
+  context-menu 属下方「registry-only SELF-BUILT」名单（glinui dist 无件）。自建件
+  `web/src/features/files/RowContextMenu.tsx` 基于该 Radix **无样式行为原语**（glinui 本体即 Radix 封装，
+  不构成引入第三方 UI 库），外观类名逐字对齐 vendored dropdown-menu 的 glass content/item variants
+  （PATH B 禁改 vendor 件，类串内联复制并注明来源）；头注释
+  `// self-build on @radix-ui/react-context-menu — TODO(Task 13 swap to glinui registry context-menu)`。
+- **vendored tree 消费偏离**：MoveDialog 目标选择器未直接渲染 vendored `Tree`——PATH B 编译版 TreeNode
+  仅 label/children/href，无 onSelect/展开回调（选中目标目录与按 `['folders',parentId]` 惰性取子级两项
+  需求均无处接线，且禁止魔改 vendor 件）；改同数据契约薄 wrapper 自建（视觉沿 tree 的玻璃边框/行距/16px
+  缩进语言，键与 useFileRows/crumbs BFS 天然共享热缓存）。见 changelog Task 9 行。
+- SELF-BUILT 名单进度：`context-menu` 已建（Task 9）；`field/empty/pagination` 已建（Task 5/7）；
+  `attachment` 已建（Task 8）；其余不变。

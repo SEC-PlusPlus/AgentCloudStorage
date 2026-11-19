@@ -2,8 +2,10 @@
 // R-T4-a2 背景占位 swap 已兑现：CSS 占位类删除，改用 vendored AuroraBackground + DotPattern（同 LoginRoute 用法）。
 // 401 接线效应原样保留（Review Focus #1）：挂载注册、卸载反注册。
 // Task 8：Dock onUpload 注入真实实现（openPicker→隐藏 input→队列 submit）；上传队列面板挂外壳层，
-// 跨 /files、/trash 持续可见（旧版进度区块只存在于工作台页）。onSearch/onNewFolder 维持 noop（Task 13/9）。
-import { useEffect } from 'react'
+// 跨 /files、/trash 持续可见（旧版进度区块只存在于工作台页）。
+// Task 9：Dock onNewFolder 实装=新建目录 modal（弹窗挂外壳层：Dock 全路由可见，
+// 落点目录=folderIdFromLocation——/trash 或搜索态=根目录，与旧版 folderID 语义一致）。onSearch 维持 noop（Task 13）。
+import { useEffect, useState } from 'react'
 import { Outlet, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { setUnauthorizedHandler } from '@/api/client'
@@ -12,12 +14,14 @@ import { DotPattern } from '@/components/glinui/components/dot-pattern'
 import { Dock, noopDockActions } from '@/components/app/Dock'
 import { TopBar } from '@/components/app/TopBar'
 import { UploadQueuePanel } from '@/components/app/UploadQueuePanel'
+import { NewFolderDialog } from '@/features/files/NewFolderDialog'
 import { useUploadManager } from '@/features/files/useUploadManager'
 import { authActions } from '@/stores/auth'
 
 export function AppLayout() {
   const navigate = useNavigate()
   const uploadManager = useUploadManager()
+  const [newFolderOpen, setNewFolderOpen] = useState(false)
 
   useEffect(() => {
     // 401 接线：request/fileContentResponse 的 401 分支 → 清会话 → toast → 跳 /login。
@@ -48,8 +52,15 @@ export function AppLayout() {
         <Outlet />
       </main>
 
-      <Dock actions={{ ...noopDockActions, onUpload: uploadManager.openPicker }} />
+      <Dock
+        actions={{
+          ...noopDockActions,
+          onUpload: uploadManager.openPicker,
+          onNewFolder: () => setNewFolderOpen(true),
+        }}
+      />
       <UploadQueuePanel />
+      <NewFolderDialog open={newFolderOpen} onClose={() => setNewFolderOpen(false)} />
     </div>
   )
 }
