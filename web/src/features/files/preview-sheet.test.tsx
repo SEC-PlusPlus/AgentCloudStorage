@@ -1,7 +1,8 @@
 // Task 10 预览 sheet 行为锚（jsdom，api 三函数整体 stub）：四类型分支渲染、text 截断徽标+旧文案、
 // blob URL 生命周期（row 切换/关闭/卸载 revoke）、迟到响应竞态丢弃（评审 Focus：快速切换不留脏帧）、
-// 头部操作（下载=downloadFile 单发+旧 toast；问 AI 禁用占位=评审 minor ⑮：disabled+aria-disabled+title+
-// 文案提示槽，Radix tooltip 打磨留 Task 12）；⑭ 键盘入口：FilesTable 文件名按钮 focus+Enter 触发 onPreview。
+// 头部操作（下载=downloadFile 单发+旧 toast；问 AI=Task 12 canAsk 接线：合格启用直触 onAsk、
+// 不合格 aria-disabled+vendored tooltip 中文 reason——minor ⑮ 占位退役）；⑭ 键盘入口：
+// FilesTable 文件名按钮 focus+Enter 触发 onPreview。
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -274,14 +275,36 @@ describe('PreviewSheet：头部操作（评审 minor ⑮）', () => {
     expect(await screen.findByText('操作失败，请稍后重试。')).toBeInTheDocument()
   })
 
-  it('问 AI：plain disabled + aria-disabled + title 说明 +（即将开放）文字提示槽；onAsk 不触发', async () => {
+  // Task 12 接线：评审 minor ⑮ 占位退役。合格行=启用直触 onAsk；不合格行=aria-disabled+onClick 守卫
+  // （原生 disabled 吞 pointer 事件会让 tooltip reason 不可达——PreviewSheet 头注裁定）+ 悬停显中文文案。
+  it('问 AI：canAsk 合格（notes.md 3 KiB）→ 启用，点击 onAsk(row)（T10 占位退役）', async () => {
     renderSheet(TEXT_ROW)
     const dialog = await screen.findByRole('dialog', { name: 'notes.md' })
-    const ask = within(dialog).getByRole('button', { name: '问 AI（即将开放）' })
-    expect(ask).toBeDisabled()
+    const ask = within(dialog).getByRole('button', { name: '问 AI' })
+    expect(ask).not.toHaveAttribute('aria-disabled')
+    await userEvent.click(ask)
+    expect(onAsk).toHaveBeenCalledWith(TEXT_ROW)
+  })
+
+  it('问 AI：canAsk 不合格（archive.zip 非 TXT/MD）→ aria-disabled、悬停 tooltip 中文 reason、点击不触发', async () => {
+    renderSheet(BIN_ROW)
+    const dialog = await screen.findByRole('dialog', { name: 'archive.zip' })
+    const ask = within(dialog).getByRole('button', { name: '问 AI' })
     expect(ask).toHaveAttribute('aria-disabled', 'true')
-    expect(ask).toHaveAttribute('title', 'AI 问答即将开放，敬请期待')
+    await userEvent.hover(ask)
+    expect(await screen.findByText('暂不支持问答，仅支持 TXT / Markdown 文件。')).toBeInTheDocument()
+    // 不加 unhover：Radix scroll-lock 后 BODY pointer-events:none，指针移出路径会被 user-event 拒
+    await userEvent.click(ask)
     expect(onAsk).not.toHaveBeenCalled()
+  })
+
+  it('问 AI：txt 但 >1 MiB → tooltip 显旧超限文案逐字（此文件超过 1 MiB，暂不支持问答。）', async () => {
+    renderSheet({ ...TEXT_ROW, id: 11, sizeBytes: (1 << 20) + 1 })
+    const dialog = await screen.findByRole('dialog', { name: 'notes.md' })
+    const ask = within(dialog).getByRole('button', { name: '问 AI' })
+    expect(ask).toHaveAttribute('aria-disabled', 'true')
+    await userEvent.hover(ask)
+    expect(await screen.findByText('此文件超过 1 MiB，暂不支持问答。')).toBeInTheDocument()
   })
 
   it('关闭按钮 → onClose', async () => {

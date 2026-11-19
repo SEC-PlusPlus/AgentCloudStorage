@@ -38,6 +38,8 @@ import { folderIdFromLocation } from '@/components/app/TopBar'
 import { ApiError } from '@/api/client'
 import { deleteFolder, downloadFile, trashFile, type FileItem } from '@/api/storage'
 import { isUsableTrail, navTrailKey, setTrail } from '@/features/files/crumbs'
+import { canAsk } from '@/features/qa/qa-state'
+import { QaSheet } from '@/features/qa/QaSheet'
 import { applyInvalidations, computeInvalidations, mutationErrorMessage } from './actions'
 import { MoveDialog } from './MoveDialog'
 import { PreviewSheet } from './PreviewSheet'
@@ -89,6 +91,14 @@ export function FilesPage() {
   const [previewRow, setPreviewRow] = useState<FileRow | null>(null)
   const openPreview = (row: FileRow) => {
     if (row.kind === 'file') setPreviewRow(row) // 文件夹行防御性忽略（入口均限 file，双保险）
+  }
+  // Task 12 问答接线：三路入口（浮条/右键菜单/预览头部）汇入；旧 openAsk 的「开问答先关预览」
+  // 语义逐字承接（adbcfba:312）。卸载 qaRow 即清对话（QaSheet 头注生命周期裁定）。
+  const [qaRow, setQaRow] = useState<FileRow | null>(null)
+  const openAsk = (row: FileRow) => {
+    if (row.kind !== 'file' || !canAsk(row).ok) return // 入口已门控，此为汇入点终闸（文件夹行防御同 openPreview）
+    setPreviewRow(null)
+    setQaRow(row)
   }
 
   // 越页兜底（Important #1）：后端越页返回 200+空 items + 真实 total——空 rows≠空目录。
@@ -258,7 +268,10 @@ export function FilesPage() {
           if (selection.length === 1 && only) setRenameTarget(only)
         }}
         onTrash={() => setDeleteTargets(selection)}
-        onAsk={() => undefined} // 浮条问 AI 按钮恒 disabled；Task 12 接线时改实
+        onAsk={() => {
+          const [only] = selection
+          if (selection.length === 1 && only) openAsk(only) // 门控在 RowToolbar 按钮与 openAsk 双层
+        }}
       />
       <RowContextMenu
         row={contextMenu?.row ?? null}
@@ -269,11 +282,13 @@ export function FilesPage() {
         onRename={setRenameTarget}
         onMove={setMoveTarget}
         onTrash={(row) => setDeleteTargets([row])}
-        onAsk={() => undefined} // 菜单项 disabled 至 Task 12
+        onAsk={openAsk} // Task 12：菜单项 canAsk 门控启用（不合格=disabled 不可 select）
       />
       {/* Task 10 预览 sheet：常驻挂载，row 引用变化驱动取数/blob 释放（PreviewSheet 头注）；
-          onAsk=Task 12 占位（按钮恒 disabled，回调不会触发）。 */}
-      <PreviewSheet row={previewRow} onClose={() => setPreviewRow(null)} onAsk={() => undefined} />
+          Task 12 接线：头部「问 AI」canAsk 门控 → openAsk（同旧版开问答先关预览）。 */}
+      <PreviewSheet row={previewRow} onClose={() => setPreviewRow(null)} onAsk={openAsk} />
+      {/* Task 12 问答 sheet：条件挂载——关闭=卸载=清对话+abort 在途（QaSheet 生命周期裁定） */}
+      {qaRow ? <QaSheet row={qaRow} open onClose={() => setQaRow(null)} /> : null}
       <RenameDialog target={renameTarget} onClose={() => setRenameTarget(null)} />
       <MoveDialog target={moveTarget} onClose={() => setMoveTarget(null)} />
       <AlertDialog

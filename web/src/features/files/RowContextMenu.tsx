@@ -18,6 +18,7 @@ import {
   Trigger,
 } from '@radix-ui/react-context-menu'
 import { Download, Eye, FolderInput, Pencil, Sparkles, Trash2 } from 'lucide-react'
+import { canAsk } from '@/features/qa/qa-state'
 import type { FileRow } from './useFileRows'
 
 export interface RowContextMenuProps {
@@ -30,7 +31,7 @@ export interface RowContextMenuProps {
   onRename(row: FileRow): void
   onMove(row: FileRow): void
   onTrash(row: FileRow): void
-  /** 问 AI——Task 12 前菜单项恒 disabled，接线留空转。 */
+  /** 问 AI——Task 12 接线：项仅 canAsk.ok 可用（Radix 菜单项 disabled 即不可 select，无需 tooltip）。 */
   onAsk(row: FileRow): void
 }
 
@@ -110,8 +111,9 @@ export function RowContextMenu({
               <FolderInput size={14} /> 移动到…
             </Item>
             {row.kind === 'file' ? (
-              <Item className={MENU_ITEM_CLASS} disabled onSelect={() => onAsk(row)}>
-                <Sparkles size={14} /> 问 AI（即将开放）
+              // Task 12：不合格文件维持禁用位（菜单项不可 focus 选中，reason 由浮条/预览头部 tooltip 承担）
+              <Item className={MENU_ITEM_CLASS} disabled={!canAsk(row).ok} onSelect={() => onAsk(row)}>
+                <Sparkles size={14} /> 问 AI
               </Item>
             ) : null}
             <Separator className={MENU_SEPARATOR_CLASS} />

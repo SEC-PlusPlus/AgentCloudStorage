@@ -15,8 +15,10 @@
 // 迟到响应（快速切换的行）gen 不匹配即弃用，其新建 URL 就地 revoke 防泄漏（评审 Focus 竞态用例钉死）。
 // 取数效应挂 useLayoutEffect（修复轮 1 / Minor-3）：row 切换的 reset/守卫态在浏览器绘制前落定，
 // 杜绝旧行内容在新行 loading 帧闪一现。
-// 头部「问 AI」= Task 12 占位（评审 minor ⑮ 裁定：plain disabled + aria-disabled + title 说明 +
-// 文案提示槽「（即将开放）」，Radix tooltip 打磨留 Task 12 接线时做）。
+// 头部「问 AI」= Task 12 接线（评审 minor ⑮ 收尾）：canAsk.ok 启用直触 onAsk；不合格保持
+// **aria-disabled + onClick 守卫**而非原生 disabled——理由：disabled 按钮吞掉 pointer/focus 事件，
+// tooltip 的 reason 将无法被键盘与鼠标用户发现；vendored Radix tooltip（mode B 在列，d.ts 确认
+// Trigger 支持 asChild 转发到 Button）承担说明呈现，替换旧 title 属性 hack。
 import { useLayoutEffect, useRef, useState } from 'react'
 import { Download, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
@@ -29,6 +31,13 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/glinui/components/sheet'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/glinui/components/tooltip'
+import { canAsk } from '@/features/qa/qa-state'
 import { CodePanel } from '@/components/app/CodePanel'
 import { Empty } from '@/components/app/Empty'
 import { downloadFile, fetchFileContent, fetchTextPreview, type FileItem } from '@/api/storage'
@@ -49,7 +58,7 @@ export interface PreviewSheetProps {
   /** null=关闭态；组件常驻挂载（FilesPage），由 row 引用变化驱动取数与释放。 */
   row: FileRow | null
   onClose(): void
-  /** Task 12 问答接线占位——当前头部按钮恒 disabled，不会被调用。 */
+  /** Task 12 问答接线：仅 canAsk.ok 的文件会触发（不合格=aria-disabled + tooltip reason）。 */
   onAsk(row: FileRow): void
 }
 
@@ -130,6 +139,11 @@ export function PreviewSheet({ row, onClose, onAsk }: PreviewSheetProps) {
     }
   }, [row])
 
+  // 「问 AI」门控（Task 12）：与 QaSheet 内部同一 canAsk 判定源，reason 供 tooltip 呈现
+  const askGate = row ? canAsk(row) : { ok: false as const, reason: undefined }
+  const askEligible = askGate.ok
+  const askReason = askGate.reason ?? '暂不支持问答。'
+
   const runDownload = async () => {
     if (!row || row.kind !== 'file') return
     try {
@@ -160,16 +174,28 @@ export function PreviewSheet({ row, onClose, onAsk }: PreviewSheetProps) {
               <Button variant="glass" size="sm" onClick={() => void runDownload()}>
                 <Download size={14} /> 下载
               </Button>
-              <Button
-                variant="glass"
-                size="sm"
-                disabled
-                aria-disabled="true"
-                title="AI 问答即将开放，敬请期待"
-                onClick={() => onAsk(row)}
-              >
-                <Sparkles size={14} /> 问 AI（即将开放）
-              </Button>
+              {/* Task 12 接线：canAsk（旧 :308 正则 ∧ 1 MiB 守卫）门控启用态 */}
+              <TooltipProvider delayDuration={0}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="glass"
+                      size="sm"
+                      aria-disabled={askEligible ? undefined : 'true'}
+                      onClick={() => {
+                        if (askEligible) onAsk(row)
+                      }}
+                    >
+                      <Sparkles size={14} /> 问 AI
+                    </Button>
+                  </TooltipTrigger>
+                  {!askEligible ? (
+                    <TooltipContent variant="glass" side="bottom">
+                      {askReason}
+                    </TooltipContent>
+                  ) : null}
+                </Tooltip>
+              </TooltipProvider>
               <Button variant="ghost" size="sm" onClick={onClose}>
                 关闭
               </Button>

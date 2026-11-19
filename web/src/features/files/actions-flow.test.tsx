@@ -271,7 +271,8 @@ describe('回收站：alert 确认（旧文案逐字）+ 失效', () => {
 })
 
 describe('右键菜单：定位打开 + 键盘角色 + 禁用项', () => {
-  it('文件行右键 → role=menu/menuitem 齐备、含问 AI disabled；Esc 关闭；重命名项接对话框', async () => {
+  // Task 12：a.txt（1.5 KiB ≤1MiB）命中旧 :308 正则 → 菜单「问 AI」从恒 disabled 转可用
+  it('文件行右键 → role=menu/menuitem 齐备、问 AI 可用（canAsk 合格）；Esc 关闭；重命名项接对话框', async () => {
     renderPage()
     await screen.findByText('a.txt')
     fireEvent.contextMenu(screen.getByText('a.txt').closest('tr') as HTMLElement)
@@ -280,9 +281,8 @@ describe('右键菜单：定位打开 + 键盘角色 + 禁用项', () => {
     for (const label of ['预览', '下载', '重命名', '移动到…', '移入回收站']) {
       expect(within(menu).getByRole('menuitem', { name: label })).toBeInTheDocument()
     }
-    const ask = within(menu).getByRole('menuitem', { name: '问 AI（即将开放）' })
-    expect(ask).toHaveAttribute('data-disabled', '') // Task 12 前恒禁用
-    expect(ask).toHaveAttribute('aria-disabled', 'true')
+    const ask = within(menu).getByRole('menuitem', { name: '问 AI' })
+    expect(ask).not.toHaveAttribute('data-disabled')
 
     fireEvent.keyDown(menu, { key: 'Escape' }) // Radix DismissableLayer 的 Esc 通道
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
@@ -369,18 +369,21 @@ describe('预览 sheet 接线（Task 10：双击/右键/键盘三路入口 + 头
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 
-  it('右键「预览」→ 同一 sheet；头部「问 AI」= 评审 minor ⑮ 占位（disabled+aria-disabled+title）', async () => {
+  // Task 12 接线：预览头部「问 AI」= 旧 openAsk「开问答先关预览」（adbcfba:312）逐字语义 →
+  // 点它后预览 sheet 让位、向文件提问 sheet 上桌。
+  it('右键「预览」→ 同一 sheet；头部「问 AI」可用，点击后预览关闭、问答 sheet 打开', async () => {
     renderPage()
     await screen.findByText('a.txt')
     fireEvent.contextMenu(screen.getByText('a.txt').closest('tr') as HTMLElement)
     await userEvent.click(await screen.findByRole('menuitem', { name: '预览' }))
 
     const dialog = await screen.findByRole('dialog', { name: 'a.txt' })
-    const ask = within(dialog).getByRole('button', { name: '问 AI（即将开放）' })
-    expect(ask).toBeDisabled()
-    expect(ask).toHaveAttribute('aria-disabled', 'true')
-    expect(ask).toHaveAttribute('title', 'AI 问答即将开放，敬请期待')
+    const ask = within(dialog).getByRole('button', { name: '问 AI' })
+    expect(ask).not.toHaveAttribute('aria-disabled')
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    await userEvent.click(ask)
+    expect(await screen.findByRole('dialog', { name: '向文件提问' })).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'a.txt' })).toBeNull())
   })
 
   it('⑭ 键盘入口：聚焦文件名按钮 Enter → sheet 打开（单击同按钮亦预览，Task 7 双击缝不回归由上文钉）', async () => {
