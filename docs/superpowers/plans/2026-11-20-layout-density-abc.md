@@ -22,7 +22,7 @@
 
 ---
 
-### Task A: 密度与节奏（宽度 / 行图标 / 容器滚动 / 间距）
+### Task 1 (A): 密度与节奏（宽度 / 行图标 / 容器滚动 / 间距）
 
 **Files:**
 - Modify: `web/src/features/files/FilesPage.tsx`、`web/src/features/trash/TrashPage.tsx`（容器 `max-w-5xl → max-w-[1440px]`，`gap-4 → gap-3`）
@@ -41,7 +41,7 @@
 - [ ] Step 4: 更新受影响的行断言测试（行结构加了图标节点；搜索副标题/选择/键盘入口不得回归）；全量 298+ 绿、build 0、gzip 记录
 - [ ] Step 5: changelog 行 + 矩阵新增 2 行（A-宽屏密度目测、内滚吸顶手感）→ commit
 
-### Task B: 选中行右栏详情面板
+### Task 2 (B): 选中行右栏详情面板
 
 **Files:**
 - Create: `web/src/features/files/DetailPanel.tsx`（+ 测试 `detail-panel.test.tsx`）
@@ -57,7 +57,7 @@
 - [ ] Step 3: 全量绿 + build；矩阵 +2 行（面板动作走查、窄屏隐藏）
 - [ ] Step 4: changelog + commit
 
-### Task C: 根目录仪表盘带（最近添加 + 存储环）
+### Task 3 (C): 根目录仪表盘带（最近添加 + 存储环）
 
 **Files:**
 - Create: `web/src/features/files/RecentStrip.tsx`（+ 测试）、纯逻辑 `recentCards(files: FileItem[], limit = 6)` 与 `usagePercent(used, quota): number` 入同文件或 lib
