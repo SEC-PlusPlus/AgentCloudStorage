@@ -9,9 +9,10 @@
 |---|---|---|---|---|---|
 | `cloud-gopher-pixel.png` | 登录 hero、空态、拖放遮罩（土拨鼠主视觉，按 2026-11-18 裁决直接采用） | 仓库既有保留素材（`web/public/images/`，git 历史自 08/09 文档期） | 来源待用户补充 | 待用户补充 | spec §1 决定保留；上线前须补来源确认 |
 | `go-mouse-pixel-v2.png` | 备用土拨鼠图（同上场景候选） | 仓库既有保留素材（`web/public/images/`） | 来源待用户补充 | 待用户补充 | 同上 |
+| `cloud-pixel-brand.png` | 主 logo / favicon / TopBar BrandMark（2026-11-19 按裁决 R(T1-C1) 采用候选①落地，Task 6） | https://opengameart.org/content/pixel-art-clouds （`clouds.png` 图集 120×120 中裁 46×24 单朵云，teal 底 `#00B1B8` 已置透明；源 zip 于 2026-11-19 实取下载成功） | dustdfg | CC0（页面 CC0 标记 2026-11-18 已核实，zip 内含 CC0.txt） | 无署名义务，仍按行登记来源 |
 | lucide 图标集（含 `Cloud`，本机已验证导出可用） | 全局主图标源（dock/按钮/菜单） | https://lucide.dev （npm `lucide-react@^1.74.0`，已装） | Lucide Contributors | ISC（spec §3 写作 MIT；实际包 license 为 ISC，宽松度等同，此处按实登记） | 按需 import，符合性能约束 |
 
-## 候选·待用户确认（主 logo / favicon，3 项）
+## 候选·待用户确认（主 logo / favicon，余 2 项；①Pixel Art Clouds 已于 2026-11-19 按裁决 R(T1-C1) 采用并移入上表）
 
 | # | 名称 | 候选用途 | 来源 URL | 作者 | 许可证 | 核实状态 |
 |---|---|---|---|---|---|---|
