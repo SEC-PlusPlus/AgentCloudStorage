@@ -132,8 +132,11 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('重命名：浮条→对话框→PATCH→失效/文案', () => {
-  it('单选文件 → 浮条重命名 → 预填当前名 → Enter 提交 → renameFile + 旧成功 toast + rename 失效键', async () => {
+// Task 2-B（abc-4）：单选浮条隐藏、DetailPanel 成唯一动作载体——以下「浮条重命名/移动」用例的
+// 按钮名与可访问名不变（预览/下载/重命名/移动/问 AI 同名），全局 findByRole 自动汇入面板，
+// 断言零削弱，仅描述改「面板」以如实反映入口。
+describe('重命名：面板→对话框→PATCH→失效/文案', () => {
+  it('单选文件 → 面板重命名 → 预填当前名 → Enter 提交 → renameFile + 旧成功 toast + rename 失效键', async () => {
     renderPage()
     await screen.findByText('a.txt')
     await selectRow('a.txt')
@@ -169,7 +172,7 @@ describe('重命名：浮条→对话框→PATCH→失效/文案', () => {
 })
 
 describe('移动：树选择器→moveFile→双目录失效（Review Focus #4）', () => {
-  it('浮条移动 → MoveDialog 根展开列出一级目录 → 选中 → 确认 → PATCH move + 源/目标/navTrail/usage 失效', async () => {
+  it('面板移动 → MoveDialog 根展开列出一级目录 → 选中 → 确认 → PATCH move + 源/目标/navTrail/usage 失效', async () => {
     renderPage()
     await screen.findByText('a.txt')
     await selectRow('a.txt')
@@ -254,7 +257,9 @@ describe('搜索态动作失效 from 键（T13 carry #14，Task 9 minor ⑪）',
     await screen.findByText('a.txt')
     await selectRow('a.txt')
     await selectRow('b.txt') // 两条命中同 folder_id=3 → Set 去重=单次失效批
-    await userEvent.click(await screen.findByRole('button', { name: '移入回收站' }))
+    // Task 2-B（abc-4）：多选时浮条与面板批量并存，同名「移入回收站」两处可达——钉浮条入口（within 收窄）
+    const toolbar = await screen.findByTestId('row-toolbar')
+    await userEvent.click(within(toolbar).getByRole('button', { name: '移入回收站' }))
     await userEvent.click(await screen.getByRole('button', { name: '确认' }))
     await waitFor(() => expect(sent('DELETE', /\/api\/v1\/files\/10$/)).toBeTruthy())
     expect(invalidatedKeys()).toEqual([['folders', 3], ['files', 3], ['search'], ['trash'], ['usage']])
@@ -262,11 +267,17 @@ describe('搜索态动作失效 from 键（T13 carry #14，Task 9 minor ⑪）',
 })
 
 describe('回收站：alert 确认（旧文案逐字）+ 失效', () => {
-  it('单选文件 → 浮条移入回收站 → 确认弹窗旧文案 → DELETE files/10 + 旧成功 toast + trash 失效键(含 usage)', async () => {
+  // Task 2-B（abc-4 连带）：单选浮条隐藏，且面板单行动作组按 brief **不含**危险动作「移入回收站」
+  // （批量侧才有；确认语义保持对话框专用）——单选移入回收站入口转右键菜单（同集合同接线），
+  // 断言链（弹窗文案/DELETE/toast/失效键）一字不削，仅入口改钉。钉浮条缺席=abc-4 显证。
+  it('单选文件 → 右键菜单「移入回收站」→ 确认弹窗旧文案 → DELETE files/10 + 旧成功 toast + trash 失效键(含 usage)', async () => {
     renderPage()
     await screen.findByText('a.txt')
     await selectRow('a.txt')
-    await userEvent.click(await screen.findByRole('button', { name: '移入回收站' }))
+    expect(screen.queryByTestId('row-toolbar')).toBeNull() // abc-4：单选浮条不再出现
+    // 勾选后面板也显同名文本——行锚取 testid（row-file:10），不再全局 getByText
+    fireEvent.contextMenu(screen.getByTestId('row-file:10'))
+    await userEvent.click(await screen.findByRole('menuitem', { name: '移入回收站' }))
     expect(screen.getByText('请确认操作')).toBeInTheDocument() // 旧标题
     expect(screen.getByText('将“a.txt”移入回收站？')).toBeInTheDocument() // 旧文案逐字
     await userEvent.click(screen.getByRole('button', { name: '确认' }))
@@ -289,15 +300,17 @@ describe('回收站：alert 确认（旧文案逐字）+ 失效', () => {
     expect(await screen.findByText(/文件夹内仍有文件或子文件夹/)).toBeInTheDocument()
   })
 
-  it('多选：浮条显计数、移动/重命名禁用、回收站可批量（顺序 DELETE 两文件 + 新拟多选文案）', async () => {
+  // Task 2-B（abc-4）：浮条收窄为纯批量载体——移动/重命名（仅单选语义）随单选浮条隐退整体移入面板，
+  // 原「禁用态」断言按裁定改「缺席态」断言（语义等价收紧：按钮不存在），批量链路断言零削弱。
+  it('多选：浮条显计数+纯批量（移动/重命名已移面板、条上不含），回收站可批量（顺序 DELETE 两文件 + 新拟多选文案）', async () => {
     renderPage()
     await screen.findByText('a.txt')
     await selectRow('a.txt')
     await selectRow('b.txt')
     const toolbar = await screen.findByTestId('row-toolbar')
     expect(within(toolbar).getByTestId('toolbar-count')).toHaveTextContent('已选 2 项')
-    expect(within(toolbar).getByRole('button', { name: '移动' })).toBeDisabled()
-    expect(within(toolbar).getByRole('button', { name: '重命名' })).toBeDisabled()
+    expect(within(toolbar).queryByRole('button', { name: '移动' })).toBeNull()
+    expect(within(toolbar).queryByRole('button', { name: '重命名' })).toBeNull()
     await userEvent.click(within(toolbar).getByRole('button', { name: '移入回收站' }))
     expect(await screen.findByText('将 2 个项目移入回收站？文件夹需为空才能删除。')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '确认' }))

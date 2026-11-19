@@ -311,6 +311,54 @@ describe('永久删除：alert-dialog 旧文案逐字 → DELETE → 旧版 toas
   })
 })
 
+// Task 2-B：勾选行 → 右栏详情面板（数据源=checkbox 勾选集合，abc-3 同款纪律）。
+// abc-2 裁定钉死：面板仅元数据+恢复，**绝无「永久删除」钮**——面板非确认渠道，防误触，
+// 永久删除唯一入口仍是行内按钮→alert-dialog（上面对话框用例保持不回归）。
+describe('Task 2-B 详情面板：勾选元数据+恢复；面板无永久删除（abc-2 钉）', () => {
+  it('单选 → 元数据四行+「恢复」钮复用 runRestore（POST+旧 toast）；面板内永久删除缺席', async () => {
+    renderPage()
+    await screen.findByText('report.pdf')
+    expect(screen.queryByTestId('detail-panel')).toBeNull() // 无选中=单栏
+    await userEvent.click(screen.getByRole('checkbox', { name: '选择 report.pdf' }))
+
+    const panel = await screen.findByTestId('detail-panel')
+    expect(within(panel).getByTestId('panel-name')).toHaveTextContent('report.pdf')
+    expect(within(panel).getByTestId('panel-field-大小')).toHaveTextContent('2.0 KB')
+    expect(within(panel).getByTestId('panel-field-删除日期')).toHaveTextContent('2026-10-05')
+    expect(within(panel).getByTestId('panel-field-所在目录')).toHaveTextContent('#7') // 冷缓存兜底=原目录列同纪律
+    expect(within(panel).queryByRole('button', { name: '永久删除' })).toBeNull()
+
+    await userEvent.click(within(panel).getByRole('button', { name: '恢复' }))
+    await waitFor(() => expect(sent('POST', /\/api\/v1\/files\/10\/restore$/)).toBeTruthy())
+    expect(await screen.findByText(COPY.restored('report.pdf'))).toBeInTheDocument()
+  })
+
+  it('多选 → 「已选 N 项」+批量恢复（顺序逐个 runRestore，不 fork 第二套 mutation）', async () => {
+    renderPage()
+    await screen.findByText('report.pdf')
+    await userEvent.click(screen.getByRole('checkbox', { name: '选择 report.pdf' }))
+    await userEvent.click(screen.getByRole('checkbox', { name: '选择 mystery.bin' }))
+    const panel = await screen.findByTestId('detail-panel')
+    expect(within(panel).getByTestId('panel-count')).toHaveTextContent('已选 2 项')
+    expect(within(panel).queryByRole('button', { name: '永久删除' })).toBeNull()
+    await userEvent.click(within(panel).getByRole('button', { name: '恢复全部' }))
+    await waitFor(() => {
+      expect(sent('POST', /\/api\/v1\/files\/10\/restore$/)).toBeTruthy()
+      expect(sent('POST', /\/api\/v1\/files\/11\/restore$/)).toBeTruthy()
+    })
+  })
+
+  it('关闭钮 → 勾选复位（TrashPage 本地 selection 直清，面板消失+checkbox 未选中）', async () => {
+    renderPage()
+    await screen.findByText('report.pdf')
+    await userEvent.click(screen.getByRole('checkbox', { name: '选择 report.pdf' }))
+    const panel = await screen.findByTestId('detail-panel')
+    await userEvent.click(within(panel).getByRole('button', { name: '关闭详情' }))
+    await waitFor(() => expect(screen.queryByTestId('detail-panel')).toBeNull())
+    expect(screen.getByRole('checkbox', { name: '选择 report.pdf' })).not.toBeChecked()
+  })
+})
+
 describe('路由注册：/trash 占位兑现为真实页面（测试锚点保留）', () => {
   it('已登录进 /trash：trash-route 锚点 + 真实页面渲染（占位文案消失）', async () => {
     authActions.setSession('tok', new Date(Date.now() + 3_600_000).toISOString(), {

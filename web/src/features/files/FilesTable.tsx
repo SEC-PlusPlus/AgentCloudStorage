@@ -56,6 +56,12 @@ export interface FilesTableProps {
   onSelectionChange?: (rows: FileRow[]) => void
   /** 单击文件夹行（FilesPage 注入：导航 + setTrail）。 */
   onFolderOpen?: (row: FileRow) => void
+  /**
+   * Task 2-B 面板关闭钮的外部清选信号（值变化 → 内部清勾选集）。**不回抛 onSelectionChange**：
+   * 发起方（FilesPage）已自清 selection 镜像，回抛只会形成环；rows 换引用清选路径仍照常上抛
+   * （Important #3 契约不回归）。
+   */
+  clearSelectionToken?: number
 }
 
 /** 行唯一键：folder/file 各自 id 独立序列（后端两表），需 kind 前缀防碰撞。 */
@@ -93,10 +99,20 @@ export function FilesTable({
   onContext = noop,
   onSelectionChange = noop,
   onFolderOpen = noop,
+  clearSelectionToken = 0,
 }: FilesTableProps) {
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const selectedRef = useRef(selected)
   selectedRef.current = selected // 渲染期镜像：effects 读最新勾选而不必把 selected 拉进依赖（避免自触发）
+
+  // Task 2-B：详情面板关闭钮 → 页面递增 token → 此处清内部勾选集（双向同步，checkbox 不滞留勾选态）。
+  // token 初值随首渲锚定，挂载后仅「值变化」才清；不通知 onSelectionChange（理由见 props 注）。
+  const clearTokenRef = useRef(clearSelectionToken)
+  useEffect(() => {
+    if (clearTokenRef.current === clearSelectionToken) return
+    clearTokenRef.current = clearSelectionToken
+    setSelected(new Set())
+  }, [clearSelectionToken])
 
   // 翻页/切目录/换搜索词都会带来新 rows 引用：清勾选，防止陈旧选择跨页泄漏给 Task 9/10 批量操作。
   // 修复轮 1 / Important #3：若清空前存在勾选，必须经 onSelectionChange([]) 上抛——

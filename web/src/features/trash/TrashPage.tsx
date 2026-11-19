@@ -13,7 +13,10 @@
 // （=旧 load()），失败只 toast 不失效。
 // 越页钳位（FilesPage Important #1 同因同修）：后端对 page>ceil(total/pageSize) 返回 200+空 items，
 // ?page= 深链/回退可落在死页——replace 回最后有效页；total≤pageSize 不渲染分页条（旧 v-if 语义）。
-import { useEffect, useMemo, useState } from 'react'
+// Task 2-B 追加：行首 checkbox 列（abc-3 面板数据源=勾选集合，与 FilesTable 同纪律；本地 selection，
+// items 换引用即清不泄漏）→ lg 起右栏 DetailPanel：仅元数据+「恢复」（复用 runRestore，批量=顺序逐个）。
+// **abc-2 钉死：永久删除永不进面板**——面板非确认渠道（防误触），确认语义=行内按钮→AlertDialog 专用。
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
@@ -28,8 +31,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/glinui/components/alert-dialog'
+import { RotateCcw } from 'lucide-react'
 import { Badge } from '@/components/glinui/components/badge'
 import { Button } from '@/components/glinui/components/button'
+import { Checkbox } from '@/components/glinui/components/checkbox'
 import { Skeleton } from '@/components/glinui/components/skeleton'
 import {
   Table,
@@ -48,7 +53,9 @@ import { isUsableTrail, navTrailKey } from '@/features/files/crumbs'
 import { applyInvalidations, computeInvalidations } from '@/features/files/actions'
 // Task 1-A：行类型图标走 lib/file-icons 共享逻辑（回收站行无 kind 判别——恒文件族）；
 // 内滚常量/容器类从 FilesTable 单源共享（brief：TrashPage shares it）。
-import { FILE_ICON_TONE_CLASS, classifyFileIcon, fileIcon } from '@/lib/file-icons'
+import { FILE_ICON_KIND_LABEL, FILE_ICON_TONE_CLASS, classifyFileIcon, fileIcon } from '@/lib/file-icons'
+import { DetailPanel } from '@/features/files/DetailPanel'
+import type { DetailPanelAction, DetailPanelSubject } from '@/features/files/DetailPanel'
 import { LIST_SCROLL_CONTAINER_CLASS, listScrollFrameStyle } from '@/features/files/FilesTable'
 import { PAGE_SIZE } from '@/features/files/useFileRows'
 import { formatBytes, formatDate } from '@/lib/format'
@@ -130,6 +137,65 @@ export function TrashPage() {
     }
   }
 
+  // —— Task 2-B 勾选→详情面板（本地 selection：回收站不借 FilesTable 缝，行集 files-only）——
+  // items 换引用（翻页/重取/恢复后 invalidate）即清勾选，防陈旧集合跨页泄漏给批量恢复（FilesTable 同纪律）。
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set())
+  const prevItemsRef = useRef(items)
+  useEffect(() => {
+    if (prevItemsRef.current === items) return
+    prevItemsRef.current = items
+    setSelectedIds(new Set())
+  }, [items])
+  const selectedItems = useMemo(() => items.filter((item) => selectedIds.has(item.id)), [items, selectedIds])
+  const allChecked = items.length > 0 && selectedItems.length === items.length
+  const toggleRow = (id: number, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (checked) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }
+  const toggleAll = (checked: boolean) => {
+    setSelectedIds(checked ? new Set(items.map((item) => item.id)) : new Set())
+  }
+
+  const trashSubjectOf = (item: FileItem): DetailPanelSubject => {
+    const kind = classifyFileIcon(item.original_name, item.content_type)
+    return {
+      key: `trash:${item.id}`,
+      name: item.original_name,
+      icon: fileIcon(item.original_name, item.content_type),
+      toneClass: FILE_ICON_TONE_CLASS[kind],
+      fields: [
+        { label: '类型', value: FILE_ICON_KIND_LABEL[kind] },
+        { label: '大小', value: formatBytes(item.size) },
+        { label: '删除日期', value: item.deleted_at ? formatDate(item.deleted_at) : '—' },
+        // 原目录口径=列表现列（sourceFolderLabel 缓存快照，冷兜底 `#<id>`，所在目录 label 统一面板词汇）
+        { label: '所在目录', value: sourceFolderLabel(queryClient.getQueryData(navTrailKey(item.folder_id)), item.folder_id) },
+      ],
+    }
+  }
+  const singleSelected = selectedItems.length === 1 ? (selectedItems[0] ?? null) : null
+  // abc-2：单行动作组**只有恢复**——永久删除永不进面板（确认渠道=行内按钮→AlertDialog 专用）。
+  const panelActions: DetailPanelAction[] = singleSelected
+    ? [
+        {
+          label: '恢复',
+          icon: RotateCcw,
+          disabled: busyId === singleSelected.id,
+          reason: '正在处理该项…',
+          onClick: () => void runRestore(singleSelected),
+        },
+      ]
+    : []
+  // 批量恢复=顺序逐个复用 runRestore（零 fork mutation；失败继续语义同回收站批量惯例，每项自带 toast/错误透传）。
+  const runRestoreAll = async () => {
+    for (const item of [...selectedItems]) await runRestore(item)
+  }
+  const panelBulkActions: DetailPanelAction[] =
+    selectedItems.length > 1 ? [{ label: '恢复全部', icon: RotateCcw, onClick: () => void runRestoreAll() }] : []
+
   // Task 1-A 密度：与 FilesPage 同组容器类替换（1440px 带宽 + gap-3 节奏）
   return (
     <div className="mx-auto flex max-w-[1440px] flex-col gap-3" data-testid="trash-page">
@@ -147,6 +213,8 @@ export function TrashPage() {
           <Table variant="glass" rowDividers containerClassName="overflow-x-auto">
             <TableHeader>
               <TableRow>
+                {/* Task 2-B：勾选列进数据表——骨架列同构补位（FilesTable 惯例：loading→loaded 零列宽跳动） */}
+                <TableHead className="w-10" />
                 <TableHead>名称</TableHead>
                 <TableHead align="right" className="w-28">大小</TableHead>
                 <TableHead className="w-32">删除日期</TableHead>
@@ -157,6 +225,7 @@ export function TrashPage() {
             <TableBody>
               {Array.from({ length: LOADING_ROWS }, (_, index) => (
                 <TableRow key={index} aria-hidden="true">
+                  <TableCell><Skeleton className="h-4 w-4" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-2/3" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-12 justify-self-end" /></TableCell>
                   <TableCell><Skeleton className="h-4 w-20" /></TableCell>
@@ -179,11 +248,21 @@ export function TrashPage() {
           <GopherScene className="max-w-[480px]" />
         </Empty>
       ) : (
-        <>
+        // Task 2-B：内容列 lg 起双栏（主列表 flex-1 + 右 aside ~340px，<lg aside hidden 回单栏）
+        <div className="flex items-start gap-3">
+          <div className="flex min-w-0 flex-1 flex-col gap-3">
           <div className="contents" style={listScrollFrameStyle}>
           <Table variant="glass" interactive rowDividers stickyHeader containerClassName={LIST_SCROLL_CONTAINER_CLASS}>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-10">
+                  <Checkbox
+                    size="sm"
+                    aria-label="全选本页"
+                    checked={allChecked ? true : selectedItems.length > 0 ? 'indeterminate' : false}
+                    onCheckedChange={(value) => toggleAll(value === true)}
+                  />
+                </TableHead>
                 <TableHead>名称</TableHead>
                 <TableHead align="right" className="w-28">大小</TableHead>
                 <TableHead className="w-32">删除日期</TableHead>
@@ -196,6 +275,14 @@ export function TrashPage() {
                 const Icon = fileIcon(item.original_name, item.content_type)
                 return (
                 <TableRow key={item.id} data-testid={`trash-row-${item.id}`}>
+                  <TableCell>
+                    <Checkbox
+                      size="sm"
+                      aria-label={`选择 ${item.original_name}`}
+                      checked={selectedIds.has(item.id)}
+                      onCheckedChange={(value) => toggleRow(item.id, value === true)}
+                    />
+                  </TableCell>
                   <TableCell truncate>
                     {/* 类型图标与 FilesTable 同逻辑（行内位保留——回收站无勾选列，不再开独立图标列；
                         icon-frame 缺位 span 自绘裁定见 lib/file-icons.ts FILE_ICON_TONE_CLASS 头注） */}
@@ -264,7 +351,14 @@ export function TrashPage() {
               }}
             />
           ) : null}
-        </>
+          </div>
+          <DetailPanel
+            selection={selectedItems.map(trashSubjectOf)}
+            actions={panelActions}
+            bulkActions={panelBulkActions}
+            onClose={() => setSelectedIds(new Set())}
+          />
+        </div>
       )}
 
       {/* 旧底部警示条逐字（含 spec §5.4 点名的「永久删除后无法恢复」句）。 */}

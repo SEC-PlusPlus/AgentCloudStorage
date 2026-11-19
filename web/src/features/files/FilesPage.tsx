@@ -14,6 +14,11 @@
 // errorMessage 载具按评审裁定换为 sonner toast）。旧版行内「更多」下拉的职责由右键菜单承接。
 // Task 10 追加：预览 sheet 接线——previewRow 状态 + openPreview 单点汇入（双击行/右键「预览」/
 // 单击·Enter 文件名按钮三路，评审强制项⑭）；下载/关闭在 sheet 头部自足，问 AI 恒 disabled 至 Task 12。
+// Task 2-B（布局密度）追加：checkbox selection 派生右栏 DetailPanel（lg 起双栏、窄屏 hidden 单栏；
+// abc-3 面板数据源=勾选集合，单击行名预览/进目录不劫持；abc-4 单选浮条隐藏、面板唯一动作载体——
+// 面板动作全部复用本页既有 handler（openPreview/runDownload/setRenameTarget/setMoveTarget/openAsk/
+// setDeleteTargets），零第二套 mutation；「所在目录」行复用 searchSourceLabel 同函数无 BFS；
+// 关闭钮=清 selection + clearSelectionToken 递增经 FilesTable 缝双向复位 checkbox）。
 import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
@@ -29,6 +34,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/glinui/components/alert-dialog'
+import { Download, Eye, FolderInput, Pencil, Sparkles, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/glinui/components/badge'
 import { Button } from '@/components/glinui/components/button'
 import { DropOverlay } from '@/components/app/DropOverlay'
@@ -41,6 +47,16 @@ import { deleteFolder, downloadFile, trashFile, type FileItem } from '@/api/stor
 import { isUsableTrail, navTrailKey, setTrail } from '@/features/files/crumbs'
 import { canAsk } from '@/features/qa/qa-state'
 import { QaSheet } from '@/features/qa/QaSheet'
+import {
+  FILE_ICON_KIND_LABEL,
+  FILE_ICON_TONE_CLASS,
+  FOLDER_ICON,
+  FOLDER_TONE_CLASS,
+  classifyFileIcon,
+  fileIcon,
+} from '@/lib/file-icons'
+import { DetailPanel } from './DetailPanel'
+import type { DetailPanelAction, DetailPanelSubject } from './DetailPanel'
 import { applyInvalidations, computeInvalidations, mutationErrorMessage } from './actions'
 import { MoveDialog } from './MoveDialog'
 import { PreviewSheet } from './PreviewSheet'
@@ -114,6 +130,63 @@ export function FilesPage() {
     setPreviewRow(null)
     setQaRow(row)
   }
+
+  // Task 2-B 详情面板派生：subjects=selection 映射（abc-3 唯一数据源=checkbox 勾选集合）；
+  // 「所在目录」复用行副标题同款 searchSourceLabel（渲染期只读 ['navTrail'] 缓存快照，无 BFS）；
+  // 关闭钮=页面清 selection + token 递增经 FilesTable 缝双向复位内部 checkbox（不反向回抛成环）。
+  const [clearSelectionToken, setClearSelectionToken] = useState(0)
+  const clearPanelSelection = () => {
+    setSelection([])
+    setClearSelectionToken((token) => token + 1)
+  }
+  const panelSubjectOf = (row: FileRow): DetailPanelSubject => {
+    // 浏览态行 folderId 恒=当前目录（folder 行契约无该字段，容器=folderId）；搜索态文件行=真实源目录。
+    const locationId = row.kind === 'file' ? row.folderId : folderId
+    const iconKind = row.kind === 'folder' ? null : classifyFileIcon(row.name, row.contentType)
+    return {
+      key: `${row.kind}:${row.id}`,
+      name: row.name,
+      icon: row.kind === 'folder' ? FOLDER_ICON : fileIcon(row.name, row.contentType),
+      toneClass: row.kind === 'folder' ? FOLDER_TONE_CLASS : FILE_ICON_TONE_CLASS[iconKind!],
+      fields: [
+        { label: '类型', value: iconKind === null ? '文件夹' : FILE_ICON_KIND_LABEL[iconKind] },
+        { label: '大小', value: row.kind === 'file' ? row.sizeText : '—' },
+        { label: '修改时间', value: row.dateText },
+        { label: '所在目录', value: searchSourceLabel(queryClient.getQueryData(navTrailKey(locationId)), locationId) },
+      ],
+    }
+  }
+  const selectionSingle = selection.length === 1 ? (selection[0] ?? null) : null
+  // 单行动作组（abc-4：面板=单选唯一动作载体）——brief §B 钉死五钮全显、不可用置灰带 reason（⑮ 模式）；
+  // 危险动作「移入回收站」按 brief 不进单行组（入口=右键菜单/批量侧），确认渠道保持对话框专用。
+  const panelActions: DetailPanelAction[] = selectionSingle
+    ? (() => {
+        const row = selectionSingle
+        const isFile = row.kind === 'file'
+        const askGate = canAsk(row)
+        return [
+          { label: '预览', icon: Eye, disabled: !isFile, reason: '文件夹不支持预览。', onClick: () => openPreview(row) },
+          { label: '下载', icon: Download, disabled: !isFile, reason: '文件夹不可下载。', onClick: () => void runDownload(selection) },
+          { label: '重命名', icon: Pencil, onClick: () => setRenameTarget(row) },
+          { label: '移动', icon: FolderInput, onClick: () => setMoveTarget(row) },
+          { label: '问 AI', icon: Sparkles, disabled: !askGate.ok, reason: askGate.reason, onClick: () => openAsk(row) },
+        ]
+      })()
+    : []
+  // 多行批量组（与 RowToolbar 并存，abc-4；语义=既有 runTrash 确认弹窗 / runDownload 逐个文件）。
+  const panelBulkActions: DetailPanelAction[] =
+    selection.length > 1
+      ? [
+          {
+            label: '下载全部',
+            icon: Download,
+            disabled: !selection.some((row) => row.kind === 'file'),
+            reason: '所选均为文件夹，无可下载项。',
+            onClick: () => void runDownload(selection),
+          },
+          { label: '移入回收站', icon: Trash2, danger: true, onClick: () => setDeleteTargets(selection) },
+        ]
+      : []
 
   // 越页兜底（Important #1）：后端越页返回 200+空 items + 真实 total——空 rows≠空目录。
   // 落定后 replace 到最后一有效页（total=0 不钳位：那是真空态，Empty 负责）。
@@ -256,7 +329,10 @@ export function FilesPage() {
           {!state.keywordMode ? <GopherScene className="max-w-[480px]" /> : null}
         </Empty>
       ) : (
-        <>
+        // Task 2-B：内容列 lg 起双栏——主列表 flex-1 + 右 aside ~340px（<lg aside hidden 回单栏）。
+        <div className="flex items-start gap-3">
+          {/* 主列保持原 flex-col gap-3 节奏（列表↔分页间距不随双栏化丢失；列表本体 display:contents 透明） */}
+          <div className="flex min-w-0 flex-1 flex-col gap-3">
           <FilesTable
             rows={state.rows}
             loading={state.isLoading}
@@ -271,6 +347,7 @@ export function FilesPage() {
             onPreview={openPreview}
             onSelectionChange={setSelection}
             onContext={(row, pos) => setContextMenu({ row, pos })}
+            clearSelectionToken={clearSelectionToken}
           />
           {!state.isLoading && state.total > 0 ? (
             <Pagination
@@ -280,7 +357,14 @@ export function FilesPage() {
               onChange={handlePageChange}
             />
           ) : null}
-        </>
+          </div>
+          <DetailPanel
+            selection={selection.map(panelSubjectOf)}
+            actions={panelActions}
+            bulkActions={panelBulkActions}
+            onClose={clearPanelSelection}
+          />
+        </div>
       )}
 
       {/* 拖放上传：仅浏览模式挂载（搜索态禁拖入=旧 onDrop 行为）；落点目录=当前 ?folder= */}
@@ -289,22 +373,11 @@ export function FilesPage() {
       ) : null}
 
       {/* —— Task 9 操作集：浮条 / 右键菜单 / 三弹窗（勾选跨页清空由 FilesTable 缝上抛 [] 保证） —— */}
+      {/* Task 2-B（abc-4）：浮条收窄为多选专属批量载体（下载/移入回收站），单目标动作全部走面板/右键菜单 */}
       <RowToolbar
         selection={selection}
         onDownload={() => void runDownload(selection)}
-        onMove={() => {
-          const [only] = selection
-          if (selection.length === 1 && only) setMoveTarget(only)
-        }}
-        onRename={() => {
-          const [only] = selection
-          if (selection.length === 1 && only) setRenameTarget(only)
-        }}
         onTrash={() => setDeleteTargets(selection)}
-        onAsk={() => {
-          const [only] = selection
-          if (selection.length === 1 && only) openAsk(only) // 门控在 RowToolbar 按钮与 openAsk 双层
-        }}
       />
       <RowContextMenu
         row={contextMenu?.row ?? null}

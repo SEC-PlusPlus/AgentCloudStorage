@@ -64,6 +64,21 @@ export const FILE_ICON_TONE_CLASS: Record<FileIconKind, string> = {
 /** 文件夹色相（与 FILE_ICON_TONE_CLASS 同表位消费）。 */
 export const FOLDER_TONE_CLASS = 'text-[var(--color-accent)]'
 
+/**
+ * 类型中文标签（Task 2-B 详情面板「类型」行消费；与图标族同表位、判类共用 classifyFileIcon，
+ * 杜绝两表漂移）。文案新拟（旧版无面板元数据行可对照）；'file' 兜底=「未知类型」
+ * 与 TrashPage 行副标题既有口径同词。文件夹不在 classifier 域内，由调用侧按 kind 直给「文件夹」。
+ */
+export const FILE_ICON_KIND_LABEL: Record<FileIconKind, string> = {
+  image: '图片',
+  video: '视频',
+  audio: '音频',
+  archive: '压缩包',
+  pdf: 'PDF',
+  code: '文本/代码',
+  file: '未知类型',
+}
+
 const inSet = (set: readonly string[], ext: string): boolean => (set as readonly string[]).includes(ext)
 
 /** 双判归类（纯函数）：ext 主判 + mime 家族第二判，判序见头注。 */
