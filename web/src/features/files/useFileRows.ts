@@ -9,10 +9,14 @@ import { formatBytes, formatDate } from '@/lib/format'
 /** 服务端分页大小（api/storage.ts 三处 page_size=20 的前端镜像）。 */
 export const PAGE_SIZE = 20
 
-/** 列表行：文件夹前置；sizeText 对文件夹恒 null（显示「—」）。 */
+/**
+ * 列表行：文件夹前置；sizeText 对文件夹恒 null（显示「—」）。
+ * sizeBytes（修复轮 1 / Important-2）：预览 100 MiB 守卫与 Task 12 canAsk >1MiB 禁用规则需要原始
+ * 字节数——item.size 本就在 mergeRows 入参手里（:37），仅上行到行契约，不新增请求。
+ */
 export type FileRow =
   | { kind: 'folder'; id: number; name: string; sizeText: null; dateText: string }
-  | { kind: 'file'; id: number; name: string; sizeText: string; dateText: string; contentType: string }
+  | { kind: 'file'; id: number; name: string; sizeBytes: number; sizeText: string; dateText: string; contentType: string }
 
 /**
  * 纯合并函数（brief Step 1 钉死）：
@@ -34,6 +38,7 @@ export function mergeRows(folders: FolderItem[], files: FileItem[], total: numbe
     kind: 'file',
     id: item.id,
     name: item.original_name,
+    sizeBytes: item.size, // Important-2：守卫判定用原始字节，展示仍走 sizeText
     sizeText: formatBytes(item.size),
     dateText: formatDate(item.created_at),
     contentType: item.content_type,

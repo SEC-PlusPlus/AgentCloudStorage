@@ -18,12 +18,18 @@ vi.mock('@/api/storage', () => ({
   downloadFile: vi.fn(),
 }))
 
-const IMG_ROW: FileRow = { kind: 'file', id: 1, name: 'photo.png', sizeText: '1 KiB', dateText: '2026-01-01', contentType: 'image/png' }
+const IMG_ROW: FileRow = { kind: 'file', id: 1, name: 'photo.png', sizeBytes: 1024, sizeText: '1 KiB', dateText: '2026-01-01', contentType: 'image/png' }
 const IMG_ROW_B: FileRow = { ...IMG_ROW, id: 2, name: 'photo2.png' }
-const VIDEO_ROW: FileRow = { kind: 'file', id: 3, name: 'clip.mp4', sizeText: '9 MiB', dateText: '2026-01-01', contentType: 'application/octet-stream' }
-const PDF_ROW: FileRow = { kind: 'file', id: 4, name: 'doc.pdf', sizeText: '2 MiB', dateText: '2026-01-01', contentType: 'application/pdf' }
-const TEXT_ROW: FileRow = { kind: 'file', id: 5, name: 'notes.md', sizeText: '3 KiB', dateText: '2026-01-01', contentType: 'text/plain' }
-const BIN_ROW: FileRow = { kind: 'file', id: 6, name: 'archive.zip', sizeText: '40 MiB', dateText: '2026-01-01', contentType: 'application/octet-stream' }
+const VIDEO_ROW: FileRow = { kind: 'file', id: 3, name: 'clip.mp4', sizeBytes: 9 * 1024 * 1024, sizeText: '9 MiB', dateText: '2026-01-01', contentType: 'application/octet-stream' }
+const PDF_ROW: FileRow = { kind: 'file', id: 4, name: 'doc.pdf', sizeBytes: 2 * 1024 * 1024, sizeText: '2 MiB', dateText: '2026-01-01', contentType: 'application/pdf' }
+const TEXT_ROW: FileRow = { kind: 'file', id: 5, name: 'notes.md', sizeBytes: 3072, sizeText: '3 KiB', dateText: '2026-01-01', contentType: 'text/plain' }
+const BIN_ROW: FileRow = { kind: 'file', id: 6, name: 'archive.zip', sizeBytes: 40 * 1024 * 1024, sizeText: '40 MiB', dateText: '2026-01-01', contentType: 'application/octet-stream' }
+// 修复轮 1 / Important-1：后端如实存浏览器上报 type（upload_handler.go:46），octet 落库是常态路径
+const OCTET_PDF_ROW: FileRow = { ...PDF_ROW, id: 7, contentType: 'application/octet-stream' }
+const OCTET_JPG_ROW: FileRow = { ...IMG_ROW, id: 8, name: 'photo.jpg', contentType: 'application/octet-stream' }
+// 修复轮 1 / Important-2：>100 MiB 非 text 守卫（adbcfba:28,386-389）——恰好 100 MiB 放行钉边界等号
+const HUGE_PDF_ROW: FileRow = { ...PDF_ROW, id: 9, sizeBytes: 100 * 1024 * 1024 + 1 }
+const EXACT_100MIB_ROW: FileRow = { ...PDF_ROW, id: 10, sizeBytes: 100 * 1024 * 1024 }
 
 // vi.mocked 句柄：工厂桩的导出仍是真实签名类型，mock 操作经 vi.mocked 取回 Mock 型（shell.test 同纪律）
 const fetchFileContentMock = vi.mocked(fetchFileContent)
@@ -140,6 +146,63 @@ describe('PreviewSheet：四类型分支', () => {
     renderSheet(IMG_ROW)
     const dialog = await screen.findByRole('dialog', { name: 'photo.png' })
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('操作失败，请稍后重试。')
+  })
+})
+
+describe('修复轮 1 / Important-1：octet 落库行的 blob MIME 规范化（旧 adbcfba:20-26 mime 表对照）', () => {
+  it('octet 存储的 doc.pdf → fetchFileContent 收到 application/pdf（iframe 才能内渲）', async () => {
+    renderSheet(OCTET_PDF_ROW)
+    await screen.findByRole('dialog', { name: 'doc.pdf' })
+    await waitFor(() =>
+      expect(fetchFileContentMock).toHaveBeenCalledWith({ id: 7, original_name: 'doc.pdf' }, 'application/pdf'),
+    )
+    expect((await screen.findByTitle('预览 doc.pdf'))).toBeTruthy()
+  })
+
+  it('octet 存储的 photo.jpg → image/jpeg；真实 type 在场则原样采信（IMG_ROW 已钉 image/png）', async () => {
+    renderSheet(OCTET_JPG_ROW)
+    await screen.findByRole('dialog', { name: 'photo.jpg' })
+    await waitFor(() =>
+      expect(fetchFileContentMock).toHaveBeenCalledWith({ id: 8, original_name: 'photo.jpg' }, 'image/jpeg'),
+    )
+  })
+
+  it('octet 存储的 clip.mp4（video 新增族）→ video/mp4 规范化', async () => {
+    renderSheet(VIDEO_ROW)
+    await screen.findByRole('dialog', { name: 'clip.mp4' })
+    await waitFor(() =>
+      expect(fetchFileContentMock).toHaveBeenCalledWith({ id: 3, original_name: 'clip.mp4' }, 'video/mp4'),
+    )
+  })
+})
+
+describe('修复轮 1 / Important-2：>100 MiB 非 text 守卫（fetchFileContent=response.blob() 全量急切下载）', () => {
+  it('101 MiB 的 doc.pdf：零内容请求 + 旧文案逐字 + 直接下载动作', async () => {
+    renderSheet(HUGE_PDF_ROW)
+    const dialog = await screen.findByRole('dialog', { name: 'doc.pdf' })
+    const alert = await within(dialog).findByRole('alert')
+    expect(alert).toHaveTextContent('文件超过 100 MiB，浏览器预览容易占用过多内存，请下载后查看。')
+    expect(fetchFileContentMock).not.toHaveBeenCalled()
+    expect(fetchTextPreviewMock).not.toHaveBeenCalled()
+    await userEvent.click(within(alert).getByRole('button', { name: '直接下载' }))
+    await waitFor(() =>
+      expect(downloadFileMock).toHaveBeenCalledWith({ id: 9, original_name: 'doc.pdf' }),
+    )
+  })
+
+  it('恰好 100 MiB 边界：守卫用 >（adbcfba:387 原样），照常发起预览请求', async () => {
+    renderSheet(EXACT_100MIB_ROW)
+    await screen.findByRole('dialog', { name: 'doc.pdf' })
+    await waitFor(() => expect(fetchFileContentMock).toHaveBeenCalled())
+    expect(within(screen.getByRole('dialog', { name: 'doc.pdf' })).queryByText('文件超过 100 MiB，浏览器预览容易占用过多内存，请下载后查看。')).toBeNull()
+  })
+
+  it('大文本不受守卫：101 MiB 的 .md 仍走 fetchTextPreview 截断流', async () => {
+    const hugeText: FileRow = { ...TEXT_ROW, id: 11, sizeBytes: 100 * 1024 * 1024 + 1 }
+    renderSheet(hugeText)
+    await screen.findByRole('dialog', { name: 'notes.md' })
+    await waitFor(() => expect(fetchTextPreviewMock).toHaveBeenCalled())
+    expect(fetchFileContentMock).not.toHaveBeenCalled()
   })
 })
 

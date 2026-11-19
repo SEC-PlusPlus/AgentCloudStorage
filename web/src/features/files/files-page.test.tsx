@@ -91,7 +91,7 @@ afterEach(() => {
 describe('FilesTable：行渲染与回调缝（Task 9/10 接线锚）', () => {
   const rows: FileRow[] = [
     { kind: 'folder', id: 7, name: '照片', sizeText: null, dateText: '2026-05-05' },
-    { kind: 'file', id: 10, name: 'a.txt', sizeText: '1.5 KB', dateText: '2026-03-03', contentType: 'text/plain' },
+    { kind: 'file', id: 10, name: 'a.txt', sizeBytes: 1536, sizeText: '1.5 KB', dateText: '2026-03-03', contentType: 'text/plain' },
   ]
 
   it('文件夹行前置；文件夹大小「—」；双击文件行 → onPreview；单击文件夹行 → onFolderOpen', async () => {
@@ -116,10 +116,10 @@ describe('FilesTable：行渲染与回调缝（Task 9/10 接线锚）', () => {
   it('rows 换引用 + 先前有勾选 → 清集并上抛空集合；勾选框态同步复位', async () => {
     const onSelectionChange = vi.fn()
     const rowsA: FileRow[] = [
-      { kind: 'file', id: 10, name: 'a.txt', sizeText: '1.0 KB', dateText: '2026-03-03', contentType: 'text/plain' },
+      { kind: 'file', id: 10, name: 'a.txt', sizeBytes: 1024, sizeText: '1.0 KB', dateText: '2026-03-03', contentType: 'text/plain' },
     ]
     const rowsB: FileRow[] = [
-      { kind: 'file', id: 20, name: 'b.txt', sizeText: '2.0 KB', dateText: '2026-03-04', contentType: 'text/plain' },
+      { kind: 'file', id: 20, name: 'b.txt', sizeBytes: 2048, sizeText: '2.0 KB', dateText: '2026-03-04', contentType: 'text/plain' },
     ]
     const { rerender } = render(<FilesTable rows={rowsA} onSelectionChange={onSelectionChange} />)
     await userEvent.click(screen.getByRole('checkbox', { name: '选择 a.txt' }))
@@ -132,7 +132,7 @@ describe('FilesTable：行渲染与回调缝（Task 9/10 接线锚）', () => {
     // 无勾选时换引用：不空报（避免噪声回调）
     onSelectionChange.mockClear()
     const rowsC: FileRow[] = [
-      { kind: 'file', id: 30, name: 'c.txt', sizeText: '3.0 KB', dateText: '2026-03-05', contentType: 'text/plain' },
+      { kind: 'file', id: 30, name: 'c.txt', sizeBytes: 3072, sizeText: '3.0 KB', dateText: '2026-03-05', contentType: 'text/plain' },
     ]
     rerender(<FilesTable rows={rowsC} onSelectionChange={onSelectionChange} />)
     expect(onSelectionChange).not.toHaveBeenCalled()
