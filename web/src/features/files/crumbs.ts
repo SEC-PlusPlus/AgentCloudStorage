@@ -37,11 +37,19 @@ export function setTrail(queryClient: QueryClient, folderId: number, crumbs: Cru
   }
 }
 
-/** 只采信「尾项 id === folderId」的非空链条，损坏缓存回落 BFS。 */
+/**
+ * 只采信「尾项 id === folderId 且全链每项 name 非空」的链条。
+ * name 检查是修复轮 1 / Finding #1：useQuery 会把 resolveAncestorPath 的降级返回值
+ * `[{id, name:''}]` 持久化进同键缓存，仅查尾 id 会让降级态冒充 fast-path 命中、阻塞重试。
+ * 无误伤风险：后端禁止空目录名，合法链（BFS 成功或 Task 7 补名后 setTrail）各项 name 恒非空；
+ * 降级单元素按合同只是返回值，不是可命中的缓存态。
+ */
 function isUsableTrail(value: unknown, folderId: number): value is Crumb[] {
   if (!Array.isArray(value) || value.length === 0) return false
-  const last = value[value.length - 1]
-  return typeof last === 'object' && last !== null && (last as Crumb).id === folderId
+  const trail = value as Crumb[]
+  const last = trail[trail.length - 1]
+  if (typeof last !== 'object' || last === null || last.id !== folderId) return false
+  return trail.every((crumb) => typeof crumb.name === 'string' && crumb.name !== '')
 }
 
 async function fetchChildFolders(queryClient: QueryClient, parentId: number) {

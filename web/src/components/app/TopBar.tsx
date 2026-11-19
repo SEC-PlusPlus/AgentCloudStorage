@@ -28,7 +28,13 @@ export function TopBar() {
   const trailQuery = useQuery({
     queryKey: navTrailKey(folderId),
     queryFn: () => resolveAncestorPath(folderId, queryClient),
-    staleTime: 5 * 60 * 1000,
+    // 修复轮 1 / Finding #1：useQuery 会把降级结果写进本键缓存，故不能用 5 min staleTime 冻结——
+    // 数据恒视为 stale（staleTime 0）+ 60s 周期重验（refetchInterval 不依赖窗口聚焦事件，
+    // jsdom/无头环境也能自愈）+ 重挂载即重跑 queryFn：模块 fast-path 只认全链有名条目
+    // （crumbs.ts isUsableTrail），降级态自动重试 BFS；合法导航（setTrail 有效链）零网络成本——
+    // queryFn 命中缓存直返，不发请求。Task 7 导航 setTrail 同键更新仍即时生效，不受 interval 影响。
+    staleTime: 0,
+    refetchInterval: 60_000,
     retry: false,
   })
   // 解析中/降级：先渲染单级占位（根目录静态可知，避免闪「目录 0」）；

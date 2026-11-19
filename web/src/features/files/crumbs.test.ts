@@ -139,6 +139,15 @@ describe('resolveAncestorPath：失败降级（Review Focus #3）', () => {
     expect(trail).toEqual([{ id: 999, name: '' }])
   })
 
+  it('useQuery 写回的降级链（name 空串）不采信：再次调用重试 BFS 自愈（修复轮 1 / Finding #1）', async () => {
+    // 模拟 TopBar 侧 useQuery 把 resolveAncestorPath 的降级结果持久化进同键缓存的场景；
+    // 合同语义：降级只作为返回值存在，不作为可命中的缓存态。
+    queryClient.setQueryData(navTrailKey(9), [{ id: 9, name: '' }])
+    const trail = await resolveAncestorPath(9, queryClient)
+    expect(mockedListFolders).toHaveBeenCalled() // 未走 fast-path
+    expect(trail.map((c) => c.id)).toEqual([0, 1, 3, 9])
+  })
+
   it('补名契约：降级 crumb 交给 setTrail 补名后可直接命中缓存', async () => {
     mockedListFolders.mockRejectedValue(new Error('offline'))
     const degraded = await resolveAncestorPath(9, queryClient)

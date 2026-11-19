@@ -1,15 +1,15 @@
 // Task 6 外壳行为锚：TopBar（品牌/面包屑/用量条）与 Dock（导航、noop 动作、用户菜单）。
 // 渲染路径自组 Provider（QueryClient 可在用例前 setTrail 预热，模拟 Task 7 导航后缓存契约）。
 import type { ReactNode } from 'react'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getStorageUsage, listFolders } from '@/api/storage'
+import { getStorageUsage, listFolders, type FolderItem } from '@/api/storage'
 import { Dock } from '@/components/app/Dock'
 import { TopBar } from '@/components/app/TopBar'
-import { setTrail } from '@/features/files/crumbs'
+import { ROOT_LABEL, navTrailKey, setTrail } from '@/features/files/crumbs'
 import { ThemeProvider } from '@/providers/theme'
 import { authActions, useAuth } from '@/stores/auth'
 
@@ -20,6 +20,17 @@ vi.mock('@/api/storage', () => ({
 
 const mockedUsage = vi.mocked(getStorageUsage)
 const mockedFolders = vi.mocked(listFolders)
+
+function folderItem(id: number, parentId: number, name: string): FolderItem {
+  return { id, parent_id: parentId, name, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' }
+}
+
+// 服务恢复后的目录树 0→1→3→9（BFS 自愈用例用）
+const RECOVERY_TREE: Record<number, FolderItem[]> = {
+  0: [folderItem(1, 0, '项目')],
+  1: [folderItem(3, 1, '文档')],
+  3: [folderItem(9, 3, '深度')],
+}
 
 function LocationProbe() {
   const { pathname, search } = useLocation()
@@ -105,6 +116,25 @@ describe('TopBar：品牌 + 面包屑 + 用量条', () => {
     renderWithProviders(<TopBar />, { entry: '/trash' })
     expect((await screen.findByTestId('breadcrumb')).textContent).toContain('根目录')
     expect(mockedFolders).not.toHaveBeenCalled()
+  })
+
+  it('缓存中的降级链（useQuery 写回形态）不再冒充 fast-path：恢复后重试 BFS 自愈（修复轮 1 / Finding #1）', async () => {
+    mockedFolders.mockRejectedValue(new Error('offline'))
+    const queryClient = renderWithProviders(<TopBar />, { entry: '/files?folder=9' })
+    expect(await screen.findByText('目录 9')).toBeInTheDocument() // 降级态：占位名显示
+    expect(queryClient.getQueryData(navTrailKey(9))).toEqual([{ id: 9, name: '' }]) // useQuery 确已写回同键
+
+    mockedFolders.mockImplementation(async (parentId: number) => ({ items: RECOVERY_TREE[parentId] ?? [] }))
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: navTrailKey(9) }) // 触发重跑 queryFn（同重挂载/聚焦路径）
+    })
+    expect(await screen.findByText('深度')).toBeInTheDocument()
+    expect(queryClient.getQueryData(navTrailKey(9))).toEqual([
+      { id: 0, name: ROOT_LABEL },
+      { id: 1, name: '项目' },
+      { id: 3, name: '文档' },
+      { id: 9, name: '深度' },
+    ])
   })
 })
 
