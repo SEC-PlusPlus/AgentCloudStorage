@@ -127,9 +127,12 @@ func TestCompositeAnswererFallbackRules(t *testing.T) {
 
 			switch {
 			case tc.primary.err == nil:
-				// 成功直通。
+				// 成功直通，且绝不触碰 fallback（review round-1 pin）。
 				if answer != "远端答案" || err != nil {
 					t.Errorf("Answer() = (%q, %v), want (%q, nil)", answer, err, "远端答案")
+				}
+				if fallback.calls != 0 {
+					t.Errorf("fallback calls = %d, want 0 (primary success must never invoke fallback)", fallback.calls)
 				}
 			case shouldFallback:
 				if fallback.calls != 1 {
