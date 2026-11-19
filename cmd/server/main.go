@@ -7,6 +7,7 @@ import (
 	"PersonalCloudStorage/internal/file"
 	"PersonalCloudStorage/internal/folder"
 	"PersonalCloudStorage/internal/httpapi"
+	"PersonalCloudStorage/internal/knowledge"
 	"PersonalCloudStorage/internal/storage"
 	"PersonalCloudStorage/internal/upload"
 	"PersonalCloudStorage/internal/user"
@@ -91,7 +92,7 @@ func main() {
 	if err != nil {
 		log.Fatal("创建 AI 模型失败:", err)
 	}
-	knowledgeHandler := httpapi.NewKnowledgeHandler(fileService, chatModel)
+	knowledgeHandler := httpapi.NewKnowledgeHandler(fileService, knowledge.NewLocalAnswerer(chatModel))
 
 	uploadRepository := upload.NewGORMRepository(db)
 	uploadService := upload.NewService(objectStorage, uploadRepository, folderService)

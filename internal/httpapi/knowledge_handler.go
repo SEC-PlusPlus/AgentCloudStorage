@@ -6,19 +6,18 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/cloudwego/eino/components/model"
 	"github.com/gin-gonic/gin"
 )
 
 type KnowledgeHandler struct {
-	files     *file.Service
-	chatModel model.BaseChatModel
+	files    *file.Service
+	answerer knowledge.Answerer
 }
 
-func NewKnowledgeHandler(files *file.Service, chatModel model.BaseChatModel) *KnowledgeHandler {
+func NewKnowledgeHandler(files *file.Service, answerer knowledge.Answerer) *KnowledgeHandler {
 	return &KnowledgeHandler{
-		files:     files,
-		chatModel: chatModel,
+		files:    files,
+		answerer: answerer,
 	}
 }
 
@@ -45,7 +44,7 @@ func (h *KnowledgeHandler) Ask(c *gin.Context) {
 	answer, err := knowledge.AskFile(
 		c.Request.Context(),
 		h.files,
-		h.chatModel,
+		h.answerer,
 		ownerID,
 		req.FileID,
 		req.Question,
