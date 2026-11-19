@@ -18,8 +18,12 @@ const FETCH_RETRIES = 5;
 const args = process.argv.slice(2);
 const dry = args.includes("--dry");
 const outIdx = args.indexOf("--out");
+if (outIdx >= 0 && (args[outIdx + 1] === undefined || args[outIdx + 1].startsWith("--"))) {
+  console.error("error: --out requires a directory value (e.g. --out src/components/glinui)");
+  process.exit(1);
+}
 const OUT_DIR = outIdx >= 0 ? args[outIdx + 1] : "src/components/glinui";
-const names = args.filter((a, i) => !a.startsWith("--") && i !== outIdx + 1);
+const names = args.filter((a, i) => !a.startsWith("--") && !(outIdx >= 0 && i === outIdx + 1));
 
 if (names.length === 0) {
   console.error("error: pass at least one registry item name");
@@ -102,4 +106,4 @@ console.log(`\nitems fetched: ${seen.size}${missing.length ? ` (missing: ${missi
 console.log(`files written: ${fileCount}${dry ? " (dry run)" : ""} -> ${OUT_DIR}`);
 console.log(`note: lib/cn.ts is hand-written, never shipped with items`);
 console.log(`npm dependency union:\n  ${[...depUnion].sort().join("\n  ")}`);
-process.exit(missing.length > 0 && missing.length === seen.size ? 1 : 0);
+process.exit(missing.length > 0 ? 1 : 0);
