@@ -6,3 +6,19 @@ body,
 #root {
   height: 100%;
 }
+
+/* R-T4-a2：vendored AuroraBackground/DotPattern 到位前的 CSS 占位背景层。
+   TODO(Task 2/6 swap)：AppLayout 改用 vendored 组件后删除这两组类。
+   配色只取 @glinui/tokens 变量（规范 §4 禁色值字面量）。 */
+.aurora-placeholder {
+  background-color: var(--color-background);
+  background-image:
+    radial-gradient(60rem 40rem at 12% -10%, color-mix(in oklab, var(--color-accent) 26%, transparent), transparent 65%),
+    radial-gradient(50rem 36rem at 110% 12%, color-mix(in oklab, var(--color-accent) 18%, transparent), transparent 62%),
+    radial-gradient(46rem 46rem at 50% 120%, color-mix(in oklab, var(--color-accent) 12%, transparent), transparent 60%);
+}
+
+.dot-pattern-placeholder {
+  background-image: radial-gradient(var(--glass-border) 1px, transparent 1.5px);
+  background-size: 24px 24px;
+}

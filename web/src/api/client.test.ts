@@ -62,6 +62,20 @@ describe('request', () => {
     expect(error.message).toBe('当前目录中已存在同名文件夹。')
   })
 
+  it('非 JSON 错误体（nginx HTML 413）→ 按 status 的中文文案（旧 UI 同款，Task 3 评审强制项）', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 413,
+      json: async () => {
+        throw new SyntaxError('Unexpected token < in JSON at position 0')
+      },
+    }))
+    const error: unknown = await request('/api/v1/files', { method: 'POST' }, 'tok').catch((e: unknown) => e)
+    if (!(error instanceof ApiError)) throw new Error('expected ApiError')
+    expect(error.status).toBe(413)
+    expect(error.message).toBe('文件过大，单次上传约支持 50 MiB 以内的文件。')
+  })
+
   it('401 带 token → unauthorizedHandler 恰好调用一次；无 token 不调用', async () => {
     const handler = vi.fn()
     setUnauthorizedHandler(handler)

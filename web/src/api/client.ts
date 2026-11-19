@@ -13,7 +13,8 @@ export class ApiError extends Error {
 
 let unauthorizedHandler: (() => void) | null = null
 
-export function setUnauthorizedHandler(fn: () => void): void {
+// Task 4 接线需要「卸载即反注册」，故允许传 null 清空（AppLayout cleanup 传 null）。
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
   unauthorizedHandler = fn
 }
 
@@ -45,6 +46,9 @@ export async function request<T>(path: string, init: RequestInit = {}, token?: s
       if (body.error) message = translateError(body.error, response.status)
     } catch {
       // Some errors (such as a proxy failure) do not return JSON.
+      // 非 JSON 兜底也过 translateError(default, status)：复刻旧 UI 对 nginx 413/507 HTML 错误页
+      // 仍显示按 status 的中文文案（Task 3 评审强制项）。
+      message = translateError(message, response.status)
     }
     throw new ApiError(message, response.status)
   }
