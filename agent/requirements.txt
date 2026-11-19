@@ -1,0 +1,8 @@
+# Direct dependencies only (whitelist per plan; no LangChain/LangGraph).
+# Unpinned until Task 7 freezes exact versions via `pip freeze`.
+fastapi
+uvicorn
+openai
+pydantic-settings
+pytest
+httpx
