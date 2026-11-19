@@ -86,9 +86,10 @@ func main() {
 	// AI 配置完整则再构造 local 档组成 composite，否则仅 remote 并响亮 Warn。
 	var answerer knowledge.Answerer
 	if strings.TrimSpace(cfg.Agent.BaseURL) != "" {
-		// remote.go 逐字拼接 baseURL+"/v1/ask"，故在此规范化尾部斜杠（controller ruling）。
+		// remote.go 逐字拼接 baseURL+"/v1/ask"，故在此规范化：先 TrimSpace 去掉
+		// 带引号 YAML 值可能带入的首尾空白，再 TrimRight 去尾斜杠（controller ruling）。
 		remote := knowledge.NewRemoteAnswerer(
-			strings.TrimRight(cfg.Agent.BaseURL, "/"),
+			strings.TrimRight(strings.TrimSpace(cfg.Agent.BaseURL), "/"),
 			cfg.Agent.APIKey,
 			cfg.Agent.Timeout,
 		)

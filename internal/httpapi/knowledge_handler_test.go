@@ -160,6 +160,7 @@ func TestStreamSSEFrameBytesAndDoneTerminator(t *testing.T) {
 	deltas := make(chan string, 3)
 	deltas <- "第一段"
 	deltas <- "带\"引号\"\n换行与\\反斜杠"
+	deltas <- `<b>&</b>`
 	close(deltas)
 
 	buf := &bytes.Buffer{}
@@ -168,14 +169,18 @@ func TestStreamSSEFrameBytesAndDoneTerminator(t *testing.T) {
 		t.Fatalf("streamSSE() error = %v", err)
 	}
 
+	// 第三帧钉住 Go 侧 ACTUAL 字节：< > & 被 encoding/json 默认 HTML 转义为 \u003c/\u003e/\u0026
+	// 形式（Python 上游用 ensure_ascii=False 发字面 <>&，两边都是合法 JSON；
+	// 此处刻意固化 Go 的转义差异，防回归）。
 	want := "data: " + `{"delta":"第一段"}` + "\n\n" +
 		"data: " + `{"delta":"带\"引号\"\n换行与\\反斜杠"}` + "\n\n" +
+		"data: " + `{"delta":"\u003cb\u003e\u0026\u003c/b\u003e"}` + "\n\n" +
 		"data: [DONE]\n\n"
 	if buf.String() != want {
 		t.Errorf("SSE bytes =\n%q\nwant\n%q", buf.String(), want)
 	}
-	if counter.n != 3 { // 两帧各一次 + [DONE] 收尾一次
-		t.Errorf("flushes = %d, want 3", counter.n)
+	if counter.n != 4 { // 三帧各一次 + [DONE] 收尾一次
+		t.Errorf("flushes = %d, want 4", counter.n)
 	}
 
 	// 无 Flusher 的实现不得 panic（防御分支）。

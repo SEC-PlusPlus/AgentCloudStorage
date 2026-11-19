@@ -103,6 +103,23 @@ func TestRemoteAnswerErrorMapping(t *testing.T) {
 	}
 }
 
+func TestRemoteAnswerWhitespaceOnly200MapsToUpstreamLLM(t *testing.T) {
+	// 映射表缺腿（promoted Minor）：HTTP 200 但 {"answer":"   "}（纯空白）
+	// → remote.go 的 TrimSpace 空答案判定必须映射到 ErrUpstreamLLM，
+	// 绝不把空白串当成功答案交给调用方。
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"answer":"   "}`)
+	}))
+	defer srv.Close()
+
+	a := NewRemoteAnswerer(srv.URL, "k", 5*time.Second)
+	_, err := a.Answer(context.Background(), "q", "s")
+	if !errors.Is(err, ErrUpstreamLLM) {
+		t.Fatalf("200 whitespace-only answer: errors.Is(err, ErrUpstreamLLM) = false, err = %v", err)
+	}
+}
+
 func TestRemoteAnswerRespectsContextCancel(t *testing.T) {
 	// 服务端挂起直到请求上下文结束；客户端 ctx 取消后 Answer 必须立即返回裸 ctx 错误（Task 9 依赖）。
 	// release 兜底：Windows 上服务端可能观察不到客户端断开，用它保证 handler 退出、srv.Close 不悬挂、无 goroutine 泄漏。

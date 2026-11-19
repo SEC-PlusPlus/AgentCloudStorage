@@ -1,8 +1,21 @@
 # agent — 内部问答服务 (FastAPI)
 
-Go 后端调用的内部 HTTP 服务，提供 `GET /healthz` 与 `POST /v1/ask`（Bearer 鉴权，
-契约见 `docs/superpowers/specs/2026-11-18-agent-python-service-design.md` §4–§5）。
+Go 后端调用的内部 HTTP 服务，提供 `GET /healthz`、`POST /v1/ask` 与
+`POST /v1/ask/stream`（Bearer 鉴权，契约见
+`docs/superpowers/specs/2026-11-18-agent-python-service-design.md` §4–§5）。
 仅监听回环/内网，绝不上公网。
+
+## 端点
+
+- `GET /healthz`：存活探针，无鉴权，返回 `{"status":"ok"}`。
+- `POST /v1/ask`：`{"question", "source"}` → `{"answer": "..."}`，非流式，Bearer 鉴权。
+- `POST /v1/ask/stream`：同一请求体与鉴权，返回 SSE 流。帧契约（Task 10 冻结，
+  Go 侧逐字节透传给浏览器）：每个增量一帧 `data: {"delta": "<文本>"}\n\n`
+  （`json.dumps ensure_ascii=False`）；正常收尾 `data: [DONE]\n\n`；流中途上游失败
+  发 `data: {"error": "upstream llm failure"}\n\n` 后直接关闭（不再发 `[DONE]`）。
+  响应头三件套：`content-type: text/event-stream; charset=utf-8`、
+  `Cache-Control: no-cache`、`X-Accel-Buffering: no`。开流前的失败不占用 SSE，
+  保持与 `/v1/ask` 一致的普通 JSON 状态码（401/422/502/504）。
 
 ## 环境变量
 

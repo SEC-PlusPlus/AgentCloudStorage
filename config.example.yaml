@@ -28,6 +28,7 @@ ai:
   base_url: https://open.bigmodel.cn/api/paas/v4
   model: glm-5.3-flash
   api_key: xxx
+
 # 拆分出去的 Python agent 服务（P1 远端模式）。留空 base_url 则走本地内置问答路径。
 # 环境变量覆盖：AGENT_BASE_URL / AGENT_API_KEY / AGENT_TIMEOUT。
 # api_key 必须与 agent 侧 AGENT_INTERNAL_TOKEN 一致；timeout 默认 60s，
