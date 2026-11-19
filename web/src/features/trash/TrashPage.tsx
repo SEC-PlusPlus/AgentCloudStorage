@@ -17,7 +17,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
-import { FileText } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/glinui/components/alert'
 import {
   AlertDialog,
@@ -47,6 +46,10 @@ import { ApiError } from '@/api/client'
 import { listTrash, permanentlyDelete, restoreFile, type FileItem } from '@/api/storage'
 import { isUsableTrail, navTrailKey } from '@/features/files/crumbs'
 import { applyInvalidations, computeInvalidations } from '@/features/files/actions'
+// Task 1-A：行类型图标走 lib/file-icons 共享逻辑（回收站行无 kind 判别——恒文件族）；
+// 内滚常量/容器类从 FilesTable 单源共享（brief：TrashPage shares it）。
+import { FILE_ICON_TONE_CLASS, classifyFileIcon, fileIcon } from '@/lib/file-icons'
+import { LIST_SCROLL_CONTAINER_CLASS, listScrollFrameStyle } from '@/features/files/FilesTable'
 import { PAGE_SIZE } from '@/features/files/useFileRows'
 import { formatBytes, formatDate } from '@/lib/format'
 
@@ -127,8 +130,9 @@ export function TrashPage() {
     }
   }
 
+  // Task 1-A 密度：与 FilesPage 同组容器类替换（1440px 带宽 + gap-3 节奏）
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-4" data-testid="trash-page">
+    <div className="mx-auto flex max-w-[1440px] flex-col gap-3" data-testid="trash-page">
       <div className="flex items-center justify-between gap-3">
         <h1 className="text-lg font-medium text-[var(--color-foreground)]">回收站</h1>
         <Badge variant="glass">{total} 个项目</Badge>
@@ -176,7 +180,8 @@ export function TrashPage() {
         </Empty>
       ) : (
         <>
-          <Table variant="glass" interactive rowDividers containerClassName="overflow-x-auto">
+          <div className="contents" style={listScrollFrameStyle}>
+          <Table variant="glass" interactive rowDividers stickyHeader containerClassName={LIST_SCROLL_CONTAINER_CLASS}>
             <TableHeader>
               <TableRow>
                 <TableHead>名称</TableHead>
@@ -187,11 +192,21 @@ export function TrashPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {items.map((item) => (
+              {items.map((item) => {
+                const Icon = fileIcon(item.original_name, item.content_type)
+                return (
                 <TableRow key={item.id} data-testid={`trash-row-${item.id}`}>
                   <TableCell truncate>
+                    {/* 类型图标与 FilesTable 同逻辑（行内位保留——回收站无勾选列，不再开独立图标列；
+                        icon-frame 缺位 span 自绘裁定见 lib/file-icons.ts FILE_ICON_TONE_CLASS 头注） */}
                     <span className="inline-flex max-w-full items-center gap-2">
-                      <FileText size={16} className="shrink-0 opacity-60" />
+                      <span
+                        aria-hidden="true"
+                        data-testid={`trash-row-icon-${item.id}`}
+                        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[var(--color-surface)]/60 ${FILE_ICON_TONE_CLASS[classifyFileIcon(item.original_name, item.content_type)]}`}
+                      >
+                        <Icon size={16} className="shrink-0" />
+                      </span>
                       <span className="flex min-w-0 flex-col leading-tight">
                         <span className="truncate">{item.original_name}</span>
                         <small className="truncate text-xs opacity-60">
@@ -231,9 +246,11 @@ export function TrashPage() {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))}
+                )
+              })}
             </TableBody>
           </Table>
+          </div>
           {total > pageSize ? (
             <Pagination
               page={page}

@@ -52,8 +52,9 @@ export function AppLayout() {
 
       <TopBar />
 
-      {/* pb 预留底部 dock 悬浮高度，避免表格末行被 dock 遮挡（spec §5.2 浮条/ dock 同区） */}
-      <main className="flex-1 p-6 pb-28">
+      {/* pb 预留底部 dock 悬浮高度，避免表格末行被 dock 遮挡（spec §5.2 浮条/ dock 同区）。
+          Task 1-A：p-6→p-4 收紧外缘留白；列表已改容器内滚，pb-28 带不再叠加页面留白感知。 */}
+      <main className="flex-1 p-4 pb-28">
         <Outlet />
       </main>
 

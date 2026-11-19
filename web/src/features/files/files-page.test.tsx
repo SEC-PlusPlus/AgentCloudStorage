@@ -156,6 +156,26 @@ describe('FilesTable：行渲染与回调缝（Task 9/10 接线锚）', () => {
     expect(onSelectionChange).toHaveBeenLastCalledWith([])
   })
 
+  // Task 1-A 行结构锚：图标列（5 列同构）+ 类型图标节点 + 内滚容器类/吸顶表头。
+  it('Task 1-A：行首图标列（文件夹 accent/文件按类型色相）；容器 max-h 内滚类 + thead sticky', () => {
+    const pngRows: FileRow[] = [
+      rows[0]!,
+      { kind: 'file', id: 99, name: 'x.png', folderId: 3, sizeBytes: 1, sizeText: '1 B', dateText: '2026-01-01', contentType: 'image/png' },
+    ]
+    render(<FilesTable rows={pngRows} />)
+    // 图标节点存在且色相分流：文件夹=accent，png=emerald
+    expect(screen.getByTestId('row-icon-folder:7').className).toContain('text-[var(--color-accent)]')
+    expect(screen.getByTestId('row-icon-file:99').className).toContain('text-emerald-500')
+    // 列同构：表头/数据行均 5 格（图标列加入后不得漏列）
+    expect(screen.getAllByRole('row')[0]!.querySelectorAll('th')).toHaveLength(5)
+    expect(screen.getByTestId('row-file:99').querySelectorAll('td')).toHaveLength(5)
+    // 内滚容器 + 吸顶（stickyHeader 此前声明但无界可滚，Task 1-A 起真正生效——锁两类共存）
+    const container = screen.getByTestId('row-file:99').closest('[data-slot="table-container"]')
+    expect(container?.className).toContain('max-h-[var(--file-list-max-h)]')
+    expect(container?.className).toContain('overflow-y-auto')
+    expect(container!.querySelector('thead')!.className).toContain('sticky')
+  })
+
   it('回调缝全部缺省时可独立渲染（no-op 默认，接线缺位不报错）', () => {
     render(<FilesTable rows={rows} />)
     fireEvent.dblClick(screen.getByText('a.txt'))
@@ -197,6 +217,10 @@ describe('Pagination：页码窗口 + 可达性', () => {
 describe('FilesPage：URL 驱动全景', () => {
   it('浏览：文件夹前置 + 格式化字段；下一页发 page=2（URL 保留 folder）', async () => {
     renderPage()
+    // Task 1-A 密度：页容器 1440px 带宽 + gap-3 节奏（与 TrashPage 同款断言）
+    const page = screen.getByTestId('files-page')
+    expect(page.className).toContain('max-w-[1440px]')
+    expect(page.className).toContain('gap-3')
     expect(await screen.findByText('照片')).toBeInTheDocument()
     expect(screen.getByText('a.txt')).toBeInTheDocument()
     expect(screen.getByText('1.5 KB')).toBeInTheDocument()

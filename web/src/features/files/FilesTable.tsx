@@ -4,8 +4,7 @@
 //   Task 10 评审强制项⑭（键盘入口）：文件名与文件夹名同构为行内按钮——文件夹=单击进入（Task 7），
 //   文件=单击/聚焦后 Enter/Space 预览；行双击缝保留不回归。按钮原生 keyboard 语义，无需自造 keydown。
 //   onFolderOpen 由 FilesPage 拥有（URL ?folder= 更新 + navTrail 追加，见 crumbs 契约）。
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { FileText, Folder } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import {
   Table,
   TableBody,
@@ -16,6 +15,13 @@ import {
 } from '@/components/glinui/components/table'
 import { Checkbox } from '@/components/glinui/components/checkbox'
 import { Skeleton } from '@/components/glinui/components/skeleton'
+import {
+  FILE_ICON_TONE_CLASS,
+  FOLDER_ICON,
+  FOLDER_TONE_CLASS,
+  classifyFileIcon,
+  fileIcon,
+} from '@/lib/file-icons'
 import { ROOT_FOLDER_ID, ROOT_LABEL, isUsableTrail } from './crumbs'
 import type { FileRow } from './useFileRows'
 
@@ -56,6 +62,28 @@ export interface FilesTableProps {
 export const rowKey = (row: FileRow): string => `${row.kind}:${row.id}`
 
 const LOADING_ROWS = 5
+
+/**
+ * 列表内滚高度扣减（Task 1-A，唯一数源；TrashPage 共享本常量）——`100vh − 272px` 的 272 构成：
+ *   TopBar（vendored glass-navbar md `min-h-14`）          ≈ 56
+ *   AppLayout main 上内边距（p-4）                          = 16
+ *   页头行（h1/工具条，Button sm h-8 取高）                 ≈ 32
+ *   页头 ↔ 列表 gap（flex-col gap-3）                      = 12
+ *   分页条行（Pagination 按钮 h-8）+ 其上 gap-3            ≈ 44
+ *   main 底部 dock 预留带（pb-28，dock fixed 悬浮区）       = 112
+ *   合计                                                    272
+ * 各「≈」项为静态组件的确定档位，浏览器矩阵 A-C11.2 目测校正。
+ */
+export const LIST_SCROLL_OFFSET_PX = 272
+/**
+ * 内滚容器类（单一字面量——Tailwind v4 扫描器不识别运行时拼接的 arbitrary 值，
+ * 变量名与 listScrollFrameStyle 的自定义属性成对，改一处须同步两处）。
+ */
+export const LIST_SCROLL_CONTAINER_CLASS = 'max-h-[var(--file-list-max-h)] overflow-x-auto overflow-y-auto'
+/** 挂在列表外层（display:contents 不引入布局盒），把常量注成 CSS 变量喂给上面的类。 */
+export const listScrollFrameStyle = {
+  '--file-list-max-h': `calc(100vh - ${LIST_SCROLL_OFFSET_PX}px)`,
+} as CSSProperties
 
 export function FilesTable({
   rows,
@@ -111,104 +139,131 @@ export function FilesTable({
   if (loading) {
     return (
       <div aria-busy="true" data-testid="files-loading">
-        <Table variant="glass" rowDividers>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-10" />
-              <TableHead>名称</TableHead>
-              <TableHead align="right" className="w-28">大小</TableHead>
-              <TableHead className="w-32">修改时间</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {Array.from({ length: LOADING_ROWS }, (_, index) => (
-              <TableRow key={index} aria-hidden="true">
-                <TableCell><Skeleton className="h-4 w-4" /></TableCell>
-                <TableCell><Skeleton className="h-4 w-2/3" /></TableCell>
-                <TableCell><Skeleton className="h-4 w-12 justify-self-end" /></TableCell>
-                <TableCell><Skeleton className="h-4 w-20" /></TableCell>
+        {/* 列骨架与数据态同构（含图标列/吸顶/内滚容器类）——loading→loaded 零列宽跳动 */}
+        <div className="contents" style={listScrollFrameStyle}>
+          <Table variant="glass" rowDividers stickyHeader containerClassName={LIST_SCROLL_CONTAINER_CLASS}>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-10" />
+                <TableHead className="w-10" aria-label="类型" />
+                <TableHead>名称</TableHead>
+                <TableHead align="right" className="w-28">大小</TableHead>
+                <TableHead className="w-32">修改时间</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {Array.from({ length: LOADING_ROWS }, (_, index) => (
+                <TableRow key={index} aria-hidden="true">
+                  <TableCell><Skeleton className="h-4 w-4" /></TableCell>
+                  <TableCell><Skeleton className="h-6 w-6" /></TableCell>
+                  <TableCell><Skeleton className="h-4 w-2/3" /></TableCell>
+                  <TableCell><Skeleton className="h-4 w-12 justify-self-end" /></TableCell>
+                  <TableCell><Skeleton className="h-4 w-20" /></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       </div>
     )
   }
 
   return (
-    <Table variant="glass" interactive rowDividers stickyHeader containerClassName="overflow-x-auto">
-      <TableHeader>
-        <TableRow>
-          <TableHead className="w-10">
-            <Checkbox
-              size="sm"
-              aria-label="全选本页"
-              checked={allChecked ? true : selectedRows.length > 0 ? 'indeterminate' : false}
-              onCheckedChange={(value) => toggleAll(value === true)}
-            />
-          </TableHead>
-          <TableHead>名称</TableHead>
-          <TableHead align="right" className="w-28">大小</TableHead>
-          <TableHead className="w-32">修改时间</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {rows.map((row) => (
-          <TableRow
-            key={rowKey(row)}
-            data-testid={`row-${rowKey(row)}`}
-            onDoubleClick={() => (row.kind === 'file' ? onPreview(row) : onFolderOpen(row))}
-            onContextMenu={(event) => {
-              event.preventDefault() // 屏蔽原生菜单（Task 9 换自绘上下文菜单）
-              onContext(row, { x: event.clientX, y: event.clientY })
-            }}
-          >
-            <TableCell>
+    <div className="contents" style={listScrollFrameStyle}>
+      <Table variant="glass" interactive rowDividers stickyHeader containerClassName={LIST_SCROLL_CONTAINER_CLASS}>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-10">
               <Checkbox
                 size="sm"
-                aria-label={`选择 ${row.name}`}
-                checked={selected.has(rowKey(row))}
-                onCheckedChange={(value) => toggleRow(row, value === true)}
+                aria-label="全选本页"
+                checked={allChecked ? true : selectedRows.length > 0 ? 'indeterminate' : false}
+                onCheckedChange={(value) => toggleAll(value === true)}
               />
-            </TableCell>
-            <TableCell truncate>
-              {row.kind === 'folder' ? (
-                // T13 carry #19（Task 10 Minor-6）：focus-visible ring 补齐——与文件名按钮（⑭）对称，
-                // 键盘 Tab 到文件夹行时焦点可见（旧缺一环属不对称疏漏，非行为差异）。
-                <button
-                  type="button"
-                  onClick={() => onFolderOpen(row)}
-                  className="inline-flex max-w-full items-center gap-2 text-left text-[var(--color-foreground)] underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+            </TableHead>
+            <TableHead className="w-10" aria-label="类型" />
+            <TableHead>名称</TableHead>
+            <TableHead align="right" className="w-28">大小</TableHead>
+            <TableHead className="w-32">修改时间</TableHead>
+          </TableRow>
+        </TableHeader>
+      <TableBody>
+        {rows.map((row) => {
+          // 行首类型图标（Task 1-A）：kind 判别在调用侧，文件族走 file-icons 双判；
+          // icon-frame 缺位 → span 自绘托底（裁定注释见 FILE_ICON_TONE_CLASS 头注，lib/file-icons.ts）。
+          const Icon = row.kind === 'folder' ? FOLDER_ICON : fileIcon(row.name, row.contentType)
+          const tone =
+            row.kind === 'folder'
+              ? FOLDER_TONE_CLASS
+              : FILE_ICON_TONE_CLASS[classifyFileIcon(row.name, row.contentType)]
+          return (
+            <TableRow
+              key={rowKey(row)}
+              data-testid={`row-${rowKey(row)}`}
+              onDoubleClick={() => (row.kind === 'file' ? onPreview(row) : onFolderOpen(row))}
+              onContextMenu={(event) => {
+                event.preventDefault() // 屏蔽原生菜单（Task 9 换自绘上下文菜单）
+                onContext(row, { x: event.clientX, y: event.clientY })
+              }}
+            >
+              <TableCell>
+                <Checkbox
+                  size="sm"
+                  aria-label={`选择 ${row.name}`}
+                  checked={selected.has(rowKey(row))}
+                  onCheckedChange={(value) => toggleRow(row, value === true)}
+                />
+              </TableCell>
+              {/* 图标列收紧横向 padding（cn=tailwind-merge 后到覆盖 p-3 的 x 轴） */}
+              <TableCell className="px-2">
+                <span
+                  aria-hidden="true"
+                  data-testid={`row-icon-${rowKey(row)}`}
+                  className={`flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--color-surface)]/60 ${tone}`}
                 >
-                  <Folder size={16} className="shrink-0 opacity-80" />
-                  <span className="truncate">{row.name}</span>
-                </button>
-              ) : (
-                // ⑭ 键盘入口：与文件夹名按钮同构（Enter/Space 原生触发=预览；focus-visible 环可见）。
-                // 终评修波 3：搜索态（searchSourceLabel 在场）名下追加源目录副标题；
-                // 按钮 self-start 保持内容宽——聚焦环/悬停下划线范围与浏览态逐像素同构。
-                <span className="flex min-w-0 flex-col leading-tight">
+                  <Icon size={16} className="shrink-0" />
+                </span>
+              </TableCell>
+              <TableCell truncate>
+                {row.kind === 'folder' ? (
+                  // T13 carry #19（Task 10 Minor-6）：focus-visible ring 补齐——与文件名按钮（⑭）对称，
+                  // 键盘 Tab 到文件夹行时焦点可见（旧缺一环属不对称疏漏，非行为差异）。
+                  // Task 1-A：行内图标上移至图标列，按钮仅剩文本（可访问名不变，锚点测试零改写）。
                   <button
                     type="button"
-                    onClick={() => onPreview(row)}
-                    className="inline-flex max-w-full items-center gap-2 self-start text-left text-[var(--color-foreground)] underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+                    onClick={() => onFolderOpen(row)}
+                    className="inline-flex max-w-full text-left text-[var(--color-foreground)] underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
                   >
-                    <FileText size={16} className="shrink-0 opacity-60" />
                     <span className="truncate">{row.name}</span>
                   </button>
-                  {searchSourceLabel ? (
-                    <small className="truncate text-xs opacity-60">{searchSourceLabel(row.folderId)}</small>
-                  ) : null}
-                </span>
-              )}
-            </TableCell>
-            <TableCell align="right" className="tabular-nums opacity-80">
-              {row.sizeText ?? '—'}
-            </TableCell>
-            <TableCell className="opacity-80">{row.dateText}</TableCell>
-          </TableRow>
-        ))}
+                ) : (
+                  // ⑭ 键盘入口：与文件夹名按钮同构（Enter/Space 原生触发=预览；focus-visible 环可见）。
+                  // 终评修波 3：搜索态（searchSourceLabel 在场）名下追加源目录副标题；
+                  // 按钮 self-start 保持内容宽——聚焦环/悬停下划线范围与浏览态逐像素同构。
+                  <span className="flex min-w-0 flex-col leading-tight">
+                    <button
+                      type="button"
+                      onClick={() => onPreview(row)}
+                      className="inline-flex max-w-full self-start text-left text-[var(--color-foreground)] underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+                    >
+                      <span className="truncate">{row.name}</span>
+                    </button>
+                    {searchSourceLabel ? (
+                      <small className="truncate text-xs opacity-60">{searchSourceLabel(row.folderId)}</small>
+                    ) : null}
+                  </span>
+                )}
+              </TableCell>
+              <TableCell align="right" className="tabular-nums opacity-80">
+                {row.sizeText ?? '—'}
+              </TableCell>
+              <TableCell className="opacity-80">{row.dateText}</TableCell>
+            </TableRow>
+          )
+        })}
       </TableBody>
-    </Table>
+      </Table>
+    </div>
+
   )
 }

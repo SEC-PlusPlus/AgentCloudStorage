@@ -199,8 +199,9 @@ export function FilesPage() {
     if (firstError) toast.error(firstError)
   }
 
+  // Task 1-A 密度：max-w-5xl(64rem)→1440px 宽屏带（验收基线 1440 屏 ≥1360 可用宽）、gap-4→gap-3
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-4" data-testid="files-page">
+    <div className="mx-auto flex max-w-[1440px] flex-col gap-3" data-testid="files-page">
       <div className="flex items-center justify-between gap-3">
         <h1 className="text-lg font-medium text-[var(--color-foreground)]">
           {state.keywordMode ? <>搜索「{keyword?.trim()}」</> : '文件'}

@@ -146,6 +146,22 @@ describe('列表渲染：表头列集 + 旧版页头/警示文案逐字', () => 
     expect(within(rowB).getByText('—')).toBeInTheDocument() // 旧 date(null)='—'
   })
 
+  // Task 1-A：回收站行类型图标（lib/file-icons 共享逻辑：pdf=rose、octet 兜底=File 淡色）；
+  // 容器内滚类 + 吸顶表头（与 FilesTable 同常量）；页容器 1440px/gap-3。
+  it('Task 1-A：行类型图标按 file-icons 分流；列表容器 max-h 内滚+thead 吸顶；页容器密度类', async () => {
+    renderPage()
+    await screen.findByText('report.pdf')
+    expect(screen.getByTestId('trash-row-icon-10').className).toContain('text-rose-500') // application/pdf
+    expect(screen.getByTestId('trash-row-icon-11').className).toContain('opacity-50') // 未知 ext+空 mime → File 兜底
+    const container = screen.getByTestId('trash-row-10').closest('[data-slot="table-container"]')
+    expect(container?.className).toContain('max-h-[var(--file-list-max-h)]')
+    expect(container?.className).toContain('overflow-y-auto')
+    expect(container!.querySelector('thead')!.className).toContain('sticky')
+    const page = screen.getByTestId('trash-page')
+    expect(page.className).toContain('max-w-[1440px]')
+    expect(page.className).toContain('gap-3')
+  })
+
   it('页头 回收站 + N 个项目 + 副标题、底部警示条文案与旧版逐字', async () => {
     renderPage()
     await screen.findByText('report.pdf')
