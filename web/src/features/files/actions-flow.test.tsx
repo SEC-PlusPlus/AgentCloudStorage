@@ -267,17 +267,18 @@ describe('搜索态动作失效 from 键（T13 carry #14，Task 9 minor ⑪）',
 })
 
 describe('回收站：alert 确认（旧文案逐字）+ 失效', () => {
-  // Task 2-B（abc-4 连带）：单选浮条隐藏，且面板单行动作组按 brief **不含**危险动作「移入回收站」
-  // （批量侧才有；确认语义保持对话框专用）——单选移入回收站入口转右键菜单（同集合同接线），
-  // 断言链（弹窗文案/DELETE/toast/失效键）一字不削，仅入口改钉。钉浮条缺席=abc-4 显证。
-  it('单选文件 → 右键菜单「移入回收站」→ 确认弹窗旧文案 → DELETE files/10 + 旧成功 toast + trash 失效键(含 usage)', async () => {
+  // Task 2-B（abc-4 连带）：单选浮条隐藏（缺席显证钉在本用例）。abc-5 补裁：面板单行组含
+  // 「移入回收站」——入口回钉面板钮，仍走 setDeleteTargets→AlertDialog→runTrash 既有链（禁 fork，
+  // 确认语义保持对话框专用）；右键菜单入口代码保留不删（菜单集由上文菜单用例自证）。
+  // 断言链（弹窗文案/DELETE/toast/失效键）一字不削。
+  it('单选文件 → 面板移入回收站 → 确认弹窗旧文案 → DELETE files/10 + 旧成功 toast + trash 失效键(含 usage)', async () => {
     renderPage()
     await screen.findByText('a.txt')
     await selectRow('a.txt')
     expect(screen.queryByTestId('row-toolbar')).toBeNull() // abc-4：单选浮条不再出现
-    // 勾选后面板也显同名文本——行锚取 testid（row-file:10），不再全局 getByText
-    fireEvent.contextMenu(screen.getByTestId('row-file:10'))
-    await userEvent.click(await screen.findByRole('menuitem', { name: '移入回收站' }))
+    const panel = await screen.findByTestId('detail-panel')
+    // abc-5：危险动作进单行组；面板内无内联确认，点钮仅开既有 AlertDialog
+    await userEvent.click(within(panel).getByRole('button', { name: '移入回收站' }))
     expect(screen.getByText('请确认操作')).toBeInTheDocument() // 旧标题
     expect(screen.getByText('将“a.txt”移入回收站？')).toBeInTheDocument() // 旧文案逐字
     await userEvent.click(screen.getByRole('button', { name: '确认' }))

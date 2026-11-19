@@ -157,8 +157,9 @@ export function FilesPage() {
     }
   }
   const selectionSingle = selection.length === 1 ? (selection[0] ?? null) : null
-  // 单行动作组（abc-4：面板=单选唯一动作载体）——brief §B 钉死五钮全显、不可用置灰带 reason（⑮ 模式）；
-  // 危险动作「移入回收站」按 brief 不进单行组（入口=右键菜单/批量侧），确认渠道保持对话框专用。
+  // 单行动作组（abc-4：面板=单选唯一动作载体）——brief §B 五钮全显、不可用置灰带 reason（⑮ 模式）；
+  // abc-5 补裁：追加「移入回收站」——仍走 setDeleteTargets→AlertDialog→runTrash 既有链（与批量同机制，
+  // 禁 fork mutation；面板内无内联确认），右键菜单入口并行保留不删。
   const panelActions: DetailPanelAction[] = selectionSingle
     ? (() => {
         const row = selectionSingle
@@ -170,6 +171,7 @@ export function FilesPage() {
           { label: '重命名', icon: Pencil, onClick: () => setRenameTarget(row) },
           { label: '移动', icon: FolderInput, onClick: () => setMoveTarget(row) },
           { label: '问 AI', icon: Sparkles, disabled: !askGate.ok, reason: askGate.reason, onClick: () => openAsk(row) },
+          { label: '移入回收站', icon: Trash2, danger: true, onClick: () => setDeleteTargets([row]) },
         ]
       })()
     : []

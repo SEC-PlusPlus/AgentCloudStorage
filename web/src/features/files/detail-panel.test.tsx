@@ -184,9 +184,11 @@ describe('FilesPage 接线：checkbox selection → 右栏面板（abc-3/abc-4�
     expect(within(panel).getByTestId('panel-field-大小')).toHaveTextContent('1.5 KB')
     // 所在目录（浏览态）：冷缓存 folder_id=3 → 「目录 3」兜底（searchSourceLabel 同纪律，无 BFS）
     expect(within(panel).getByTestId('panel-field-所在目录')).toHaveTextContent('目录 3')
-    for (const label of ['预览', '下载', '重命名', '移动', '问 AI']) {
+    // abc-5 补裁后单行组=6 钮（危险动作「移入回收站」在列，确认仍走对话框）
+    for (const label of ['预览', '下载', '重命名', '移动', '问 AI', '移入回收站']) {
       expect(within(panel).getByRole('button', { name: label })).toBeInTheDocument()
     }
+    expect(within(panel).getByRole('button', { name: '移入回收站' })).not.toHaveAttribute('aria-disabled')
     expect(screen.queryByTestId('row-toolbar')).toBeNull() // abc-4：单选浮条不再出现
 
     // 问 AI 门控：报告.pdf 非 TXT/MD → canAsk 拒（reason 同 qa-state 表），a.txt 合格 → 可用
@@ -196,6 +198,19 @@ describe('FilesPage 接线：checkbox selection → 右栏面板（abc-3/abc-4�
     expect(ask).toHaveAttribute('aria-disabled', 'true')
     await userEvent.hover(ask)
     expect(await screen.findByText('暂不支持问答，仅支持 TXT / Markdown 文件。')).toBeInTheDocument()
+  })
+
+  // Minor-1（评审 fix 轮）：门控只钉过 disabled 侧——本条补「合格 txt → 面板问 AI 真汇入 openAsk」
+  // 的接通显证（T9 占位退役终态：问答 sheet 上桌）。
+  it('面板「问 AI」（合格 txt）→ openAsk 真被调：问答 sheet 上桌', async () => {
+    renderPage()
+    await screen.findByText('a.txt')
+    await selectRow('a.txt')
+    const panel = await screen.findByTestId('detail-panel')
+    const ask = within(panel).getByRole('button', { name: '问 AI' })
+    expect(ask).not.toHaveAttribute('aria-disabled')
+    await userEvent.click(ask)
+    expect(await screen.findByRole('dialog', { name: '向文件提问' })).toBeInTheDocument()
   })
 
   it('勾选文件夹行 → 预览/下载/问 AI 置灰带 reason；重命名/移动可用', async () => {
