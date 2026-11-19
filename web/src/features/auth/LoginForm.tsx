@@ -1,9 +1,12 @@
 // 登录表单（Task 5 / spec §5.1）：mascot hero + Heading + Field(邮箱/密码) + liquid Button。
 // 成功：authActions.setSession(login 响应字段) → navigate('/files')；
-// 失败：Field 下方 Alert(destructive) 显示 ApiError.message（中文映射/限流等待时长已在 api 层完成）；
-// pending 期间按钮 disabled 防重复提交。注册入口按产品决策保持禁用（仅静态提示，无注册 UI 调用）。
+// 失败：双载体（spec §5.1「错误走 alert + toast」，控制端 2026-11-19 裁定）——
+//   ①Field 下方 Alert(destructive) 常驻显示 ApiError.message；
+//   ②toast.error 弹出同一文案（中文映射/限流等待时长已在 api 层完成）。
+// 成功分支不加 toast。pending 期间按钮 disabled 防重复提交。注册入口按产品决策保持禁用（仅静态提示，无注册 UI 调用）。
 import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router'
+import { toast } from 'sonner'
 import { login } from '@/api/auth'
 import { Alert } from '@/components/glinui/components/alert'
 import { BlurFade } from '@/components/glinui/components/blur-fade'
@@ -32,7 +35,10 @@ export function LoginForm() {
       navigate('/files')
     } catch (error) {
       // ApiError.message 已由 client.translateError 中文化（含「too many login attempts」等待时长文案）。
-      setErrorMessage(error instanceof Error ? error.message : '登录失败，请稍后重试。')
+      // 双载体（spec §5.1 裁定）：内联 Alert 常驻 + toast.error 弹出同一文案。
+      const message = error instanceof Error ? error.message : '登录失败，请稍后重试。'
+      setErrorMessage(message)
+      toast.error(message)
     } finally {
       setPending(false)
     }
