@@ -5,6 +5,9 @@
 // 「逐条对照移植=不扩集」——它们只经 mime 双判兜底（如 ct=image/svg+xml、text/*）或落 download-only。
 // 旧版取扩展名即 `name.split('.').pop().toLowerCase()`——无点文件名整名当 ext 查表（查不到自然不匹配），
 // 原语义原样保留（如名为「pdf」的旧版可预览，新版同样判 pdf，属逐字对照而非缺陷）。
+// 双判优先序声明（T13 carry #18 / Task 10 Minor-4）：同族内 ext 命中与 ct 前缀等价（任一即归该族）；
+// 跨族冲突按判定序 image > video > pdf > text 先到先得——ct-family 先于后族 ext 判走，
+// 例：`.log` + ct=`video/mp4` 归 video（text-ext 不赢）。旧版单 ct 判定，跨族歧义为新增面。
 export type PreviewKind = 'image' | 'video' | 'pdf' | 'text' | 'download-only'
 
 /** 旧 previewTypes image 六项逐字（adbcfba:21-23）。 */

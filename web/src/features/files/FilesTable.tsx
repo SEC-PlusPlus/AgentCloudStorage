@@ -153,10 +153,12 @@ export function FilesTable({
             </TableCell>
             <TableCell truncate>
               {row.kind === 'folder' ? (
+                // T13 carry #19（Task 10 Minor-6）：focus-visible ring 补齐——与文件名按钮（⑭）对称，
+                // 键盘 Tab 到文件夹行时焦点可见（旧缺一环属不对称疏漏，非行为差异）。
                 <button
                   type="button"
                   onClick={() => onFolderOpen(row)}
-                  className="inline-flex max-w-full items-center gap-2 text-left text-[var(--color-foreground)] underline-offset-4 hover:underline"
+                  className="inline-flex max-w-full items-center gap-2 text-left text-[var(--color-foreground)] underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
                 >
                   <Folder size={16} className="shrink-0 opacity-80" />
                   <span className="truncate">{row.name}</span>

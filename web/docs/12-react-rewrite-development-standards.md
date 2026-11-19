@@ -40,7 +40,7 @@
 ## 5. 状态
 
 - 服务端数据只走 TanStack Query。key 规范（spec §6）：`['files',folderId,page]`、`['folders',parentId]`、`['trash',page]`、`['search',q,page]`、`['usage']`、`['crumbs',folderId]`。
-- mutation 成功 → invalidate 相关 key（源目录、目标目录、面包屑、用量四者，见 Review Focus 4）+ sonner toast。
+- mutation 成功 → invalidate 相关 key（源目录、目标目录、面包屑、用量四者，见 spec §6 末「TanStack Query key」段；T13 carry #1：原引「Review Focus 4」为计划侧文档，规范正文改指 spec 锚点）+ sonner toast。
 - 只有跨组件 UI 状态与服务端不承载的会话才进 zustand。
 - 会话兼容旧版：sessionStorage `acs.access-token` / `acs.expires-at` / `acs.user`；localStorage `acs.multipart.<uid>`。
 - 上传阈值：`file.size >= 49 * 1024 * 1024` 走分片，否则直传；问答限制 `file.size > 1 << 20` 禁用、问题 maxLength 500。

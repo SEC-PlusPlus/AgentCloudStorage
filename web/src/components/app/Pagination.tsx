@@ -2,6 +2,8 @@
 // 服务端分页条（Task 7：后端每页 20 条、无排序参数，pagination 只管页码而非行虚拟化）。
 // 纯受控展示件：page/pageSize/total 全由调用方（URL searchParams）注入，本件无内部状态。
 // 键盘可达：全部动作走原生 <button>（Tab 聚焦 / Enter/Space 激活），当前页 aria-current="page"。
+// T13 carry #8（Task 7 评审建议）：当前页由真 disabled 改 aria-disabled——真 disabled 把焦点踢出 Tab 序
+// （键盘翻页走到当前页焦点瞬丢）；aria-current 标态 + aria-disabled 标不可操作，点击仍由 go() 幂等吞掉。
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { cn } from '@/components/glinui/lib/cn'
 
@@ -68,7 +70,8 @@ export function Pagination({ page, pageSize = 20, total, onChange, disabled = fa
             type="button"
             aria-label={`第 ${item} 页`}
             aria-current={item === current ? 'page' : undefined}
-            disabled={disabled || item === current}
+            aria-disabled={item === current ? true : undefined}
+            disabled={disabled}
             onClick={() => go(item)}
             className="inline-flex h-8 min-w-8 items-center justify-center rounded-lg border border-white/10 bg-white/5 px-2 text-sm transition-colors duration-200 hover:bg-white/10 aria-[current=page]:border-[var(--color-accent)]/40 aria-[current=page]:bg-[var(--color-accent)]/20 disabled:pointer-events-none disabled:opacity-40"
           >

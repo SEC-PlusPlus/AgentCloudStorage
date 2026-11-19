@@ -178,16 +178,25 @@ describe('移动：树选择器→moveFile→双目录失效（Review Focus #4�
     // 打开时惰性查询根（parent_id=0）；默认选中根目录（旧 targetID=0）
     await waitFor(() => expect(sent('GET', /\/api\/v1\/folders\?parent_id=0/)).toBeTruthy())
     const rootOption = screen.getByRole('button', { name: '移动到“根目录”' })
-    expect(rootOption).toHaveAttribute('aria-pressed', 'true')
+    // T13 carry #13：选中态单一事实源=treeitem aria-selected（按钮上的 aria-pressed 已去重）。
+    expect(rootOption.closest('[role="treeitem"]')).toHaveAttribute('aria-selected', 'true')
     await userEvent.click(screen.getByRole('button', { name: '移动到“照片”' }))
     await userEvent.click(screen.getByRole('button', { name: '确认' }))
 
     await waitFor(() => expect(sent('PATCH', /\/api\/v1\/files\/10\/move$/)).toBeTruthy())
     expect(JSON.parse(sent('PATCH', /\/api\/v1\/files\/10\/move$/)!.body!)).toEqual({ folder_id: 7 })
     expect(await screen.findByText('项目已移动。')).toBeInTheDocument() // 旧 toast 文案
-    expect(invalidatedKeys()).toEqual(
-      expect.arrayContaining([['folders', 3], ['files', 3], ['folders', 7], ['files', 7], ['navTrail'], ['usage']]),
-    )
+    // T13 carry #15（Task 9 minor ⑫）：arrayContaining→精确调用序（computeInvalidations 钉死顺序+去重，
+    // 含 ['search']——旧断言连缺它都测不出，正是评审要收紧的点）。
+    expect(invalidatedKeys()).toEqual([
+      ['folders', 3],
+      ['files', 3],
+      ['folders', 7],
+      ['files', 7],
+      ['search'],
+      ['navTrail'],
+      ['usage'],
+    ])
   })
 
   it('树惰性展开：点展开「照片」才发 parent_id=7 查询，子目录出现且可选中', async () => {
@@ -219,6 +228,36 @@ describe('移动：树选择器→moveFile→双目录失效（Review Focus #4�
     await userEvent.click(screen.getByRole('button', { name: '确认' }))
     expect(await screen.findByText('不能将文件夹移动到自身或其子目录中。')).toBeInTheDocument()
     expect(sent('PATCH', /\/api\/v1\/folders\/7\/move$/)).toBeTruthy()
+  })
+})
+
+describe('搜索态动作失效 from 键（T13 carry #14，Task 9 minor ⑪）', () => {
+  it('?q= 无 folder 语境：rename 的 from 键=命中项 item.folder_id（3），不再错打根目录键', async () => {
+    // FILE_A.folder_id=3；URL 无 ?folder= → folderIdFromLocation=0。修复前失效打的是 0——源目录幽灵行滞留。
+    renderPage('/files?q=a')
+    await screen.findByText('a.txt')
+    await selectRow('a.txt')
+    await userEvent.click(await screen.findByRole('button', { name: '重命名' }))
+    const input = screen.getByRole('textbox', { name: '新名称' })
+    expect(input).toHaveValue('a.txt')
+    await userEvent.clear(input)
+    await userEvent.type(input, 'a.txt') // 同名提交（stub 不查重，钉的是失效键形状）
+    await userEvent.keyboard('{Enter}')
+    await waitFor(() => expect(sent('PATCH', /\/api\/v1\/files\/10$/)).toBeTruthy())
+    // 精确序：from=3（folder_id），browse 兜底 currentFolder=0 不参与 rename 型计算。
+    expect(await screen.findByText('名称已更新。')).toBeInTheDocument()
+    expect(invalidatedKeys()).toEqual([['folders', 3], ['files', 3], ['search'], ['navTrail']])
+  })
+
+  it('?q= 无 folder 语境：批量回收站的 from 键同样取 folder_id（search/trash/usage 族前缀照常）', async () => {
+    renderPage('/files?q=a')
+    await screen.findByText('a.txt')
+    await selectRow('a.txt')
+    await selectRow('b.txt') // 两条命中同 folder_id=3 → Set 去重=单次失效批
+    await userEvent.click(await screen.findByRole('button', { name: '移入回收站' }))
+    await userEvent.click(await screen.getByRole('button', { name: '确认' }))
+    await waitFor(() => expect(sent('DELETE', /\/api\/v1\/files\/10$/)).toBeTruthy())
+    expect(invalidatedKeys()).toEqual([['folders', 3], ['files', 3], ['search'], ['trash'], ['usage']])
   })
 })
 

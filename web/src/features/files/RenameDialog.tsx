@@ -25,6 +25,8 @@ import type { FileRow } from './useFileRows'
 export interface RenameDialogProps {
   target: FileRow | FileRow[] | null
   onClose(): void
+  /** T13 carry #14：行真实源目录（搜索态 URL 无 folder 语境，调用方传 item.folder_id 作失效 from 键）；省略=当前目录。 */
+  fromFolder?: number
 }
 
 /** 数组→单选归一（多选无重命名语义 → null 关闭态）。 */
@@ -32,7 +34,7 @@ export function normalizeSingleTarget(target: FileRow | FileRow[] | null): FileR
   return Array.isArray(target) ? (target.length === 1 ? (target[0] ?? null) : null) : target
 }
 
-export function RenameDialog({ target, onClose }: RenameDialogProps) {
+export function RenameDialog({ target, onClose, fromFolder }: RenameDialogProps) {
   const row = normalizeSingleTarget(target)
   const queryClient = useQueryClient()
   const { pathname, search } = useLocation()
@@ -50,7 +52,11 @@ export function RenameDialog({ target, onClose }: RenameDialogProps) {
       vars.row.kind === 'file' ? renameFile(vars.row.id, vars.name) : renameFolder(vars.row.id, vars.name),
     onSuccess: () => {
       toast('名称已更新。') // 旧 confirmDialog 文案
-      applyInvalidations(queryClient, computeInvalidations({ type: 'rename', fromFolder: folderId }, folderId))
+      // T13 carry #14：源键优先用调用方注入的行真实目录（搜索态），缺省回落当前目录（browse 态旧行为）。
+      applyInvalidations(
+        queryClient,
+        computeInvalidations({ type: 'rename', fromFolder: fromFolder ?? folderId }, folderId),
+      )
       onClose()
     },
     onError: (error) => toast.error(mutationErrorMessage(error)),

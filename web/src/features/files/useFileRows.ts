@@ -25,8 +25,11 @@ export type FileRow =
  * 文件夹行仍须保留，故空判定要求三者同时为空；④ 搜索模式调用方传 folders=[]，
  * 天然忽略文件夹前置（行集恒 files-only）。
  */
-export function mergeRows(folders: FolderItem[], files: FileItem[], total: number): FileRow[] {
-  if (total === 0 && folders.length === 0 && files.length === 0) return []
+// 形参 `total`（brief 钉死签名）在删死码早退后不再被读取：加 _ 前缀满足 noUnusedParameters，
+// 调用点（useFileRows/测试）位置传参不受影响；total 的消费方是上游 isEmpty/分页，非本函数（见上文 ③）。
+export function mergeRows(folders: FolderItem[], files: FileItem[], _total: number): FileRow[] {
+  // T13 carry #7（Task 7 minor）：原「三者全空早退」为死码——空集经 map+concat 天然得 []，空判定契约
+  // 归调用方 isEmpty（上文 ③）。保注释删条件（评审钉：文档性说明保留）。
   const folderRows: FileRow[] = folders.map((item) => ({
     kind: 'folder',
     id: item.id,
@@ -67,6 +70,8 @@ export function useFileRows(folderId: number, page: number, keyword: string | nu
   const kw = keyword?.trim() ?? ''
   const keywordMode = kw !== ''
 
+  // T13 carry #10（Task 7 minor）：手造 `?folder=&q=` / `?folder=3&q=x` 组合——keywordMode 分支为权威：
+  // 搜索态不发 folders 查询、search 键不含目录，?folder= 值（空/非法/存在）在本 hook 一律被忽略，不报错不回落。
   const listQuery = useQuery({
     queryKey: keywordMode ? (['search', kw, page] as const) : (['files', folderId, page] as const),
     queryFn: () => (keywordMode ? searchFiles(kw, page) : listFiles(folderId, page)),

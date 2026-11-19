@@ -20,6 +20,8 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    // T13 carry #3（Task 1 minor ②）：固化 jsdom 文档 URL（smoke.test 的 location.href 断言因此不依赖默认值）。
+    environmentOptions: { jsdom: { url: 'http://localhost:3000/' } },
     setupFiles: ['src/test-setup.ts'],
   },
 })

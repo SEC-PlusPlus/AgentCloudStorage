@@ -131,10 +131,11 @@ afterEach(() => {
 })
 
 describe('列表渲染：表头列集 + 旧版页头/警示文案逐字', () => {
-  it('渲染 名称/大小/删除时间/原目录/操作 列与两行数据（formatBytes/formatDate、未知类型、— 兜底）', async () => {
+  it('渲染 名称/大小/删除日期/原目录/操作 列与两行数据（formatBytes/formatDate、未知类型、— 兜底）', async () => {
+    // T13 carry #20：表头「删除时间」改回旧 verbatim「删除日期」（adbcfba TrashPage.vue:71），文案+测试同步。
     renderPage()
     await screen.findByText('report.pdf')
-    for (const header of ['名称', '大小', '删除时间', '原目录', '操作']) {
+    for (const header of ['名称', '大小', '删除日期', '原目录', '操作']) {
       expect(screen.getByRole('columnheader', { name: header })).toBeInTheDocument()
     }
     const rowA = screen.getByTestId('trash-row-10')

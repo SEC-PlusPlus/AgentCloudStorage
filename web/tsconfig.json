@@ -1,12 +1,9 @@
 {
+  // T13 carry #4（Task 1 minor ③）：solution 文件（files:[] 不编译源）原有 paths 为惰性冗余，已删。
+  // `@/*` 唯一事实源：tsconfig.app.json（编译器侧）+ vite.config.ts alias（运行时侧），vite-tsconfig-paths 未装、无人读本文件 paths。
   "files": [],
   "references": [
     { "path": "./tsconfig.app.json" },
     { "path": "./tsconfig.node.json" }
-  ],
-  "compilerOptions": {
-    "paths": {
-      "@/*": ["./src/*"]
-    }
-  }
+  ]
 }

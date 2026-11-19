@@ -32,9 +32,11 @@ import type { FileRow } from './useFileRows'
 export interface MoveDialogProps {
   target: FileRow | FileRow[] | null
   onClose(): void
+  /** T13 carry #14：被移项真实源目录（搜索态 URL 无 folder 语境，调用方传 item.folder_id 作失效 from 键）；省略=当前目录。 */
+  fromFolder?: number
 }
 
-export function MoveDialog({ target, onClose }: MoveDialogProps) {
+export function MoveDialog({ target, onClose, fromFolder }: MoveDialogProps) {
   const row = normalizeSingleTarget(target)
   const queryClient = useQueryClient()
   const { pathname, search } = useLocation()
@@ -67,7 +69,11 @@ export function MoveDialog({ target, onClose }: MoveDialogProps) {
       toast('项目已移动。') // 旧 confirmDialog 文案
       applyInvalidations(
         queryClient,
-        computeInvalidations({ type: 'move', fromFolder: folderId, toFolder: selectedId }, folderId),
+        // T13 carry #14：源键优先用调用方注入的行真实目录（搜索态），缺省回落当前目录（browse 态旧行为）。
+        computeInvalidations(
+          { type: 'move', fromFolder: fromFolder ?? folderId, toFolder: selectedId },
+          folderId,
+        ),
       )
       onClose()
     },
@@ -121,7 +127,12 @@ interface PickerProps {
   onToggle(id: number): void
 }
 
-/** 根节点 + 递归子级。惰性：仅展开过（expanded 含）的目录发 ['folders',id] 查询。 */
+/** 根节点 + 递归子级。惰性：仅展开过（expanded 含）的目录发 ['folders',id] 查询。
+ * T13 carry #13（Task 9 minor ⑩）键盘模式备案：本件是 tree/treeitem 角色 + 逐节点原生
+ * <button> 的混合模式——Tab 逐钮聚焦可用，但未实现规范 roving-tabindex 树模式（单 tabindex 位 +
+ * ↑↓/←→/Home/End 移动、展开收起随方向键）；完整化留给 Task 13 registry swap（vendored <tree>）
+ * 或后续键盘轮，届时一并处理。选中态单一事实源=treeitem aria-selected（T13 已去重按钮上的
+ * aria-pressed——双属性会让读屏对同一状态双报）。 */
 function FolderPicker({ selectedId, onSelect, expanded, onToggle }: PickerProps) {
   return (
     <div
@@ -175,7 +186,7 @@ function FolderBranch({ id, name, depth, selectedId, onSelect, expanded, onToggl
         <button
           type="button"
           aria-label={`移动到“${name}”`}
-          aria-pressed={selectedId === id}
+          // T13 carry #13：aria-pressed 已去重——选中态由外层 treeitem aria-selected 单源承载。
           onClick={() => onSelect(id)}
           className={
             selectedId === id

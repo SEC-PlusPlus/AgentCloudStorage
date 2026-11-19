@@ -41,6 +41,9 @@ const controllers = new Map<string, AbortController>()
 let activeRowId: string | null = null
 let halted = false // 旧语义：本批次出过失败/取消 → 其余文件不再自动跑
 let batchUploaded = 0
+// T13 carry #12（Task 8 Minor-7）：最近一次 submitFiles 的落点目录（面板头部显目标，不再静默落根）。
+// 跨目录混合队列显最近意图——每个任务真实落点仍在 entries 里（重试按原 folderID 跑）。
+let lastTargetFolderID = 0
 
 function setTasks(mutate: (prev: UploadTask[]) => UploadTask[]): void {
   store.setState((state) => ({ tasks: mutate(state.tasks) }))
@@ -113,6 +116,7 @@ function pump(): void {
 /** 入队并尝试开跑。folderID=投放时刻的当前目录（旧 uploadFiles 用 folderID.value 同义）。 */
 export function submitFiles(files: File[], folderID: number): void {
   if (files.length === 0) return
+  lastTargetFolderID = folderID
   // 修复轮 1 / Important-2：halted 熔断只在「没有正在跑的文件」时被新的用户意图清除——
   // 此前要求队列同时为空，导致批次失败留下 queued 行后、新提交被搁浅永不泵送（queued 行 UI 又无重试入口）。
   // batchUploaded 仍仅在全新批次（队列亦为空）时清零；残留 queued 行随队列原序续跑。
@@ -173,6 +177,8 @@ export interface UploadManagerView {
   tasks: UploadTask[]
   /** 队列正在搬运文件（旧 busy 的等价，供入口禁用；queued 滞留不算 busy——失败熔断后仍可点重试/再投）。 */
   busy: boolean
+  /** T13 carry #12：最近一次 submitFiles 的落点目录 id（UploadQueuePanel 头部显「保存到：…」用）。 */
+  lastTargetFolderID: number
   submitFiles(files: File[], folderID: number): void
   cancelTask(rowId: string): void
   retryTask(rowId: string): void
@@ -187,7 +193,7 @@ export function useUploadManager(): UploadManagerView {
   }, [queryClient])
   const tasks = store((state) => state.tasks)
   const busy = tasks.some((t) => t.status === 'uploading' || t.status === 'merging')
-  return { tasks, busy, submitFiles, cancelTask, retryTask, openPicker }
+  return { tasks, busy, lastTargetFolderID, submitFiles, cancelTask, retryTask, openPicker }
 }
 
 /** 仅测试用：复位模块单例（vitest 同文件内无模块隔离；业务代码禁止调用）。 */
@@ -198,6 +204,7 @@ export function resetUploadManager(): void {
   activeRowId = null
   halted = false
   batchUploaded = 0
+  lastTargetFolderID = 0
   configuredQueryClient = null
   uploadInput = null
   seq = 0

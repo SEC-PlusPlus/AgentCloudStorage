@@ -33,6 +33,7 @@ import { Badge } from '@/components/glinui/components/badge'
 import { Button } from '@/components/glinui/components/button'
 import { DropOverlay } from '@/components/app/DropOverlay'
 import { Empty } from '@/components/app/Empty'
+import { GopherScene } from '@/components/app/GopherScene'
 import { Pagination } from '@/components/app/Pagination'
 import { folderIdFromLocation } from '@/components/app/TopBar'
 import { ApiError } from '@/api/client'
@@ -81,6 +82,17 @@ export function FilesPage() {
 
   const state = useFileRows(folderId, page, keyword)
 
+  // T13 carry #14（Task 9 minor ⑪）：搜索态命中来自任意目录且 URL 无 folder 语境（folderId=0）——
+  // 动作失效的 from 键必须改用行真实源目录 items[].folder_id（useFileRows 已透传 items），
+  // 否则 ['files',0] 空失效、源目录幽灵行滞留。浏览态行为不变（行必在当前目录，from=folderId）。
+  // 搜索态行集恒 files-only（mergeRows ④），id 查 items 必命中；多源批量=按源目录去重逐个失效。
+  const sourceFolderOf = (rowIds: number[]): number[] => {
+    if (!state.keywordMode) return [folderId]
+    const ids = new Set<number>()
+    for (const item of state.items) if (rowIds.includes(item.id)) ids.add(item.folder_id)
+    return ids.size > 0 ? [...ids] : [folderId]
+  }
+
   // Task 9 操作集状态：勾选集合（浮条消费）、右键目标+坐标（菜单消费）、三个待办弹窗的行参数。
   const [selection, setSelection] = useState<FileRow[]>([])
   const [contextMenu, setContextMenu] = useState<{ row: FileRow; pos: { x: number; y: number } } | null>(null)
@@ -97,6 +109,8 @@ export function FilesPage() {
   const [qaRow, setQaRow] = useState<FileRow | null>(null)
   const openAsk = (row: FileRow) => {
     if (row.kind !== 'file' || !canAsk(row).ok) return // 入口已门控，此为汇入点终闸（文件夹行防御同 openPreview）
+    // T13 carry #21a 镜像：旧 :312 序列是「先关旧问答会话再开新」；新版「已开 ask 中换文件」路径由
+    // 挂载点 QaSheet key={qaRow.id} 的 remount 等价达成（清旧对话+abort 在途），当前由 modal 不可达掩护，属防御性覆盖。
     setPreviewRow(null)
     setQaRow(row)
   }
@@ -137,6 +151,10 @@ export function FilesPage() {
   // 下载：旧 startDownload 语义（busy 锁由 pending 天然覆盖——fetch 完成即 toast）；
   // 多选=逐个文件（仅文件行，浮条过滤后传入）。emoji/unicode 文件名原样保留=downloadFile 锚点法
   // （storage.ts:120-130 仅读 id/original_name——此处收窄 cast 仅携两字段，理由注释随行为）。
+  // T13 carry #16（Task 9 minor ⑬）批量失败语义「择一」定样（注释惯例，行为不变）：
+  // 下载=首个失败即中断（半途混批下载状态对用户无提示价值，错误文案已到位即停）；
+  // 回收站=继续逐个+聚合首个错误（删除类动作部分成功更常见，剩余项状态对用户仍有效）。
+  // 两向并存是有意的惯例（保守不可逆侧停止、可提示侧继续），不是疏漏。
   const runDownload = async (rows: FileRow[]) => {
     for (const row of rows) {
       if (row.kind !== 'file') continue
@@ -164,7 +182,10 @@ export function FilesPage() {
         firstError ??= mutationErrorMessage(error)
       }
     }
-    applyInvalidations(queryClient, computeInvalidations({ type: 'trash', fromFolder: folderId }, folderId))
+    // 失效逐源执行（T13 carry #14）：搜索态批量可跨源目录；browse 态 sourceFolderOf 恒 [folderId] 单次。
+    for (const from of sourceFolderOf(rows.map((row) => row.id))) {
+      applyInvalidations(queryClient, computeInvalidations({ type: 'trash', fromFolder: from }, folderId))
+    }
     const [only] = rows
     if (ok > 0) {
       toast(
@@ -228,7 +249,11 @@ export function FilesPage() {
               ? { label: '清除搜索', onClick: () => navigate({ pathname: '/files', search: '' }) }
               : undefined
           }
-        />
+        >
+          {/* T13 carry #22：files 空态=品牌场景接入（旧 AuthPage StorageScene 的移植件）；
+              搜索无结果是瞬态（清除搜索按钮已自足），不挂场景免噪音。 */}
+          {!state.keywordMode ? <GopherScene className="max-w-[480px]" /> : null}
+        </Empty>
       ) : (
         <>
           <FilesTable
@@ -287,10 +312,21 @@ export function FilesPage() {
       {/* Task 10 预览 sheet：常驻挂载，row 引用变化驱动取数/blob 释放（PreviewSheet 头注）；
           Task 12 接线：头部「问 AI」canAsk 门控 → openAsk（同旧版开问答先关预览）。 */}
       <PreviewSheet row={previewRow} onClose={() => setPreviewRow(null)} onAsk={openAsk} />
-      {/* Task 12 问答 sheet：条件挂载——关闭=卸载=清对话+abort 在途（QaSheet 生命周期裁定） */}
-      {qaRow ? <QaSheet row={qaRow} open onClose={() => setQaRow(null)} /> : null}
-      <RenameDialog target={renameTarget} onClose={() => setRenameTarget(null)} />
-      <MoveDialog target={moveTarget} onClose={() => setMoveTarget(null)} />
+      {/* Task 12 问答 sheet：条件挂载——关闭=卸载=清对话+abort 在途（QaSheet 生命周期裁定）。
+          T13 carry #21a：key={qaRow.id} 一字加固——若「已开 ask 中换文件再 ask」路径出现
+          （现由 modal 不可达掩护，旧版 :312 靠先关旧会话达成），remount 即清旧对话+abort 在途，语义同旧。 */}
+      {qaRow ? <QaSheet key={qaRow.id} row={qaRow} open onClose={() => setQaRow(null)} /> : null}
+      {/* T13 carry #14：搜索态弹窗的 from 失效键=行真实源目录（folder_id），browse 态与缺省等价。 */}
+      <RenameDialog
+        target={renameTarget}
+        fromFolder={renameTarget ? sourceFolderOf([renameTarget.id])[0] : undefined}
+        onClose={() => setRenameTarget(null)}
+      />
+      <MoveDialog
+        target={moveTarget}
+        fromFolder={moveTarget ? sourceFolderOf([moveTarget.id])[0] : undefined}
+        onClose={() => setMoveTarget(null)}
+      />
       <AlertDialog
         open={deleteTargets !== null}
         onOpenChange={(open) => {

@@ -18,6 +18,9 @@ export const navTrailKey = (folderId: number) => ['navTrail', folderId] as const
 const foldersKey = (parentId: number) => ['folders', parentId] as const
 
 const TRAIL_STALE_TIME = 5 * 60 * 1000
+// T13 carry #17（Task 9 minor ⑯）已知窗口：rename 后各级 navTrail 缓存旧名最长滞留 60s——
+// ['navTrail'] 族失效（actions.ts）只标 stale，TopBar trail 查询靠 refetchInterval=60_000 周期重验自愈
+// （staleTime 0 设计，见 TopBar.tsx 修复轮 1 注释）；期间面包屑可能显旧名，非缺陷、为自愈上限。
 
 export function rootCrumb(): Crumb {
   return { id: ROOT_FOLDER_ID, name: ROOT_LABEL }

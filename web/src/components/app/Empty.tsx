@@ -1,6 +1,9 @@
 // self-build — TODO(Task 13 swap to glinui registry <empty>)
 // 空态骨架（spec §11 兜底：registry-only 件 PATH B 无）：mascot 图 + title/description/action 三槽。
 // 无障碍：容器 role="status"（polite 播报「空了」），mascot 为装饰性 alt=""。
+// T13 carry #9（Task 7 minor「live region 挂载时机」，记录性跳过）：status 容器随 Empty 同挂载/同卸载，
+// 「挂载即有文案」部分 AT 不播报——常驻化需把 live region 提升到路由外全局壳层（组件契约改动、
+// 播报内容归属会跨页串扰），收益不确定，本轮不动结构，按评审原话备案。
 import type { ReactNode } from 'react'
 import { Heading } from '@/components/glinui/components/heading'
 import { Text } from '@/components/glinui/components/text'

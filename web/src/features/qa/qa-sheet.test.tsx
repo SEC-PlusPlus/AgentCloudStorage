@@ -70,9 +70,12 @@ describe('QaSheet 对话流', () => {
     await ask('这份资料的主要结论是什么？')
 
     expect(screen.getByText('这份资料的主要结论是什么？')).toBeInTheDocument() // user 气泡
-    expect(within(screen.getByRole('dialog')).getByRole('status')).toHaveTextContent(
-      '正在从文件中寻找回答…',
-    )
+    // T13 carry #21b：Thinking 不再自带 role=status（嵌 role=log 双报）——占位文案仍在 log 内可见，
+    // 状态角色消失（dialog 内查不到 status），播报职责归外层 log。
+    expect(
+      within(screen.getByRole('log', { name: '问答对话' })).getByText('正在从文件中寻找回答…'),
+    ).toBeInTheDocument()
+    expect(within(screen.getByRole('dialog', { name: '向文件提问' })).queryByRole('status')).toBeNull()
     expect(askFileMock).toHaveBeenCalledTimes(1)
     expect(askFileMock.mock.calls[0]?.[0]).toBe(7)
     expect(askFileMock.mock.calls[0]?.[1]).toBe('这份资料的主要结论是什么？')

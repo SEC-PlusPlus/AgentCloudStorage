@@ -13,9 +13,13 @@ export class ApiError extends Error {
 
 let unauthorizedHandler: (() => void) | null = null
 
-// Task 4 接线需要「卸载即反注册」，故允许传 null 清空（AppLayout cleanup 传 null）。
-export function setUnauthorizedHandler(fn: (() => void) | null): void {
+// Task 4 接线需要「卸载即反注册」，故允许传 null 清空。
+// T13 carry #6（Task 4 minor ②）：返回注册前旧值——卸载侧 save-restore 前值而非无条件置 null，
+// 防御未来出现「外壳 A 卸载踩掉外壳 B 刚注册的 handler」一类踩踏（当前仅 AppLayout 注册，行为不变）。
+export function setUnauthorizedHandler(fn: (() => void) | null): (() => void) | null {
+  const previous = unauthorizedHandler
   unauthorizedHandler = fn
+  return previous
 }
 
 // request 之外的 401 分支（storage.ts fileContentResponse）也经由此触发同一处理器。

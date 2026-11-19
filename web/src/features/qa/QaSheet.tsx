@@ -94,6 +94,9 @@ export function QaSheet({ row, open, onClose }: QaSheetProps) {
       return
     }
     if (!eligibility.ok) return // 入口已按 canAsk 禁用；此为直接提交的最后防线（旧 :350 守卫位）
+    // T13 carry #21c：旧 :350 运行态文案「当前只支持不超过 1 MiB 的文本文件。」未落位属有意——
+    // 不合格时入口（按钮/菜单）已禁、输入已停、hint（role=alert）已显 canAsk reason（QA_* 文案表），
+    // 本分支理论不可达；评审裁定加注释备案不补文案。
     setPreflightError('')
     setTurns((list) => appendTurn(list, { role: 'user', text: asked }))
     setQuestion('')

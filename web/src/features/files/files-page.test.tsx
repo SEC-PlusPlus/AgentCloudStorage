@@ -171,12 +171,16 @@ describe('Pagination：页码窗口 + 可达性', () => {
     expect(pageItems(20, 20)).toEqual([1, '…', 19, 20])
   })
 
-  it('当前页 aria-current=page 且禁用；上一页/下一页边界禁用；点击回调目标页', async () => {
+  it('当前页 aria-current=page + aria-disabled 可聚焦；上一页/下一页边界禁用；点击回调目标页', async () => {
     const onChange = vi.fn()
     render(<Pagination page={1} total={25} onChange={onChange} />)
     const current = screen.getByRole('button', { name: '第 1 页' })
     expect(current).toHaveAttribute('aria-current', 'page')
-    expect(current).toBeDisabled()
+    // T13 carry #8：当前页不再真 disabled（焦点保留在 Tab 序），改 aria-disabled 标不可操作；点击由 go() 幂等吞掉。
+    expect(current).not.toBeDisabled()
+    expect(current).toHaveAttribute('aria-disabled', 'true')
+    await userEvent.click(current)
+    expect(onChange).not.toHaveBeenCalled()
     expect(screen.getByRole('button', { name: '上一页' })).toBeDisabled()
     await userEvent.click(screen.getByRole('button', { name: '下一页' }))
     expect(onChange).toHaveBeenCalledWith(2)

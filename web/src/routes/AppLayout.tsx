@@ -25,13 +25,16 @@ export function AppLayout() {
 
   useEffect(() => {
     // 401 接线：request/fileContentResponse 的 401 分支 → 清会话 → toast → 跳 /login。
-    // 挂载注册、卸载反注册（null），避免登录页等外壳外组件残留旧 navigate。
-    setUnauthorizedHandler(() => {
+    // T13 carry #6（Task 4 minor ②）：卸载改「恢复前值」而非置 null——当前前值恒 null（唯一注册方），
+    // 语义与原 cleanup 等价，仅防御多注册方并存时的互相踩掉；登录页等外壳外组件不再残留旧 navigate 的保证不变。
+    const previous = setUnauthorizedHandler(() => {
       authActions.clear()
       toast('登录已过期')
       navigate('/login')
     })
-    return () => setUnauthorizedHandler(null)
+    return () => {
+      setUnauthorizedHandler(previous)
+    }
   }, [navigate])
 
   return (

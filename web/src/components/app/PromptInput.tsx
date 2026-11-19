@@ -55,7 +55,10 @@ export function PromptInput({
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== 'Enter' || event.shiftKey) return
-    if (composingRef.current || event.nativeEvent.isComposing) return // IME 组合期吞掉 Enter
+    // IME 组合期吞掉 Enter。T13 carry #21d：已知边缘（部分安卓 IME 在 compositionend 之后才补发
+    // 收尾 Enter 的 keydown——此刻双通道门已放行，理论存在「意外提交」窗口）。评审给的 ~50ms 时间闸
+    // 会反向吞掉「组合刚结束的正常快 Enter」，收益/风险比不佳；按 carry 许可记录理由暂缓，真机报障再启。
+    if (composingRef.current || event.nativeEvent.isComposing) return
     event.preventDefault()
     if (canSubmit) onSubmit()
   }

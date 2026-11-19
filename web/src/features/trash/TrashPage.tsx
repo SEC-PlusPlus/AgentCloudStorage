@@ -1,7 +1,8 @@
 // 回收站页（Task 11 / spec §5.4）：同外壳复用——vendored `Table` 原语 + self-build Pagination/Empty。
 // 行集 files-only（回收站无文件夹语义），故不进 FilesTable 的勾选/预览/右键回调缝，直接以原语组表；
 // mergeRows 不适用（dateText=created_at 且行契约无 folder_id/deleted_at），本页自带薄映射。
-// 列集（plan Interfaces）：名称 / 大小 / 删除时间（deleted_at 经 formatDate，缺失「—」=旧 date() 兜底）
+// 列集（plan Interfaces）：名称 / 大小 / 删除日期（T13 carry #20 改回旧 verbatim「删除日期」，
+// adbcfba TrashPage.vue:71；deleted_at 经 formatDate，缺失「—」=旧 date() 兜底）
 // / 原目录（**只读 ['navTrail'] 缓存**，尾项名命中即显；未命中 `#<folder_id>` 兜底——裁定不为这一列
 // 触发 BFS 冷扫描）/ 操作（恢复直按、永久删除走 alert-dialog）。
 // 文案全部逐字移植 adbcfba TrashPage.vue：页头/副标题/N 个项目/加载/空态两行/底部警示条/
@@ -40,6 +41,7 @@ import {
   TableRow,
 } from '@/components/glinui/components/table'
 import { Empty } from '@/components/app/Empty'
+import { GopherScene } from '@/components/app/GopherScene'
 import { Pagination } from '@/components/app/Pagination'
 import { ApiError } from '@/api/client'
 import { listTrash, permanentlyDelete, restoreFile, type FileItem } from '@/api/storage'
@@ -143,7 +145,7 @@ export function TrashPage() {
               <TableRow>
                 <TableHead>名称</TableHead>
                 <TableHead align="right" className="w-28">大小</TableHead>
-                <TableHead className="w-32">删除时间</TableHead>
+                <TableHead className="w-32">删除日期</TableHead>
                 <TableHead className="w-32">原目录</TableHead>
                 <TableHead align="right" className="w-44">操作</TableHead>
               </TableRow>
@@ -168,7 +170,10 @@ export function TrashPage() {
           </AlertDescription>
         </Alert>
       ) : items.length === 0 && !outOfRange ? (
-        <Empty title="回收站是空的" description="被移入回收站的文件会显示在这里。" />
+        <Empty title="回收站是空的" description="被移入回收站的文件会显示在这里。">
+          {/* T13 carry #22：trash 空态接入品牌场景（brief Step 1「登录/空态接入 GopherScene」）。 */}
+          <GopherScene className="max-w-[480px]" />
+        </Empty>
       ) : (
         <>
           <Table variant="glass" interactive rowDividers containerClassName="overflow-x-auto">
@@ -176,7 +181,7 @@ export function TrashPage() {
               <TableRow>
                 <TableHead>名称</TableHead>
                 <TableHead align="right" className="w-28">大小</TableHead>
-                <TableHead className="w-32">删除时间</TableHead>
+                <TableHead className="w-32">删除日期</TableHead>
                 <TableHead className="w-32">原目录</TableHead>
                 <TableHead align="right" className="w-44">操作</TableHead>
               </TableRow>

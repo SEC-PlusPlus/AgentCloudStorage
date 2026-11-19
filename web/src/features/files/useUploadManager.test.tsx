@@ -258,7 +258,18 @@ describe('Attachment 行：状态文案与操作可用性', () => {
     expect(screen.queryByRole('button', { name: '重试' })).toBeNull()
   })
 
-  it('uploading/queued 可取消；failed 显错误文案 + 重试且无取消；done 无操作', () => {
+  it('T13 carry #11（Minor-6）：直传（<49MiB）进行中无取消钮（旧版直传无中止通道，点击空转）；queued 出队仍有效', () => {
+    const small: UploadTask = { id: 'r9', name: 'small.txt', size: 1024, percent: 40, status: 'uploading' }
+    const { unmount } = render(<Attachment task={small} onCancel={vi.fn()} onRetry={vi.fn()} />)
+    expect(screen.getByText(/上传中/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '取消' })).toBeNull()
+    unmount()
+
+    render(<Attachment task={{ ...small, status: 'queued', percent: 0 }} onCancel={vi.fn()} onRetry={vi.fn()} />)
+    expect(screen.getByRole('button', { name: '取消' })).toBeInTheDocument() // 出队=真有效，保留
+  })
+
+  it('uploading/queued 可取消（分片行 size≥49MiB）；failed 显错误文案 + 重试且无取消；done 无操作', () => {
     const { unmount } = render(<Attachment task={row('uploading')} onCancel={vi.fn()} onRetry={vi.fn()} />)
     expect(screen.getByRole('button', { name: '取消' })).toBeInTheDocument()
     unmount()
@@ -278,5 +289,41 @@ describe('Attachment 行：状态文案与操作可用性', () => {
     rerender(<Attachment task={row('cancelled')} onCancel={onCancel} onRetry={onRetry} />)
     screen.getByRole('button', { name: '重试' }).click()
     expect(onRetry).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('UploadQueuePanel 头部目标目录（T13 carry #12 / Minor-7）', () => {
+  it('搜索/trash 态落根上传：头部显「保存到：根目录」，不再静默', async () => {
+    renderHarness(true)
+    await waitFor(() => expect(view).not.toBeNull())
+    act(() => {
+      view!.submitFiles([fileNamed('a.txt')], 0)
+    })
+    expect(await screen.findByTestId('upload-target')).toHaveTextContent('保存到：根目录')
+    act(() => posts[0]?.resolve(jsonResponse(200, { id: 1 }))) // 收尾放行，不留悬挂 POST
+  })
+
+  it('非根目标：navTrail 缓存命中（TopBar 暖链契约）→ 显尾项名', async () => {
+    renderHarness(true)
+    queryClient.setQueryData(['navTrail', 3], [
+      { id: 0, name: '根目录' },
+      { id: 3, name: '照片' },
+    ])
+    await waitFor(() => expect(view).not.toBeNull())
+    act(() => {
+      view!.submitFiles([fileNamed('a.txt')], 3)
+    })
+    expect(await screen.findByTestId('upload-target')).toHaveTextContent('保存到：照片')
+    act(() => posts[0]?.resolve(jsonResponse(200, { id: 2 })))
+  })
+
+  it('冷缓存兜底按 TopBar 面包屑同款「目录 <id>」占位，不静默不造假名', async () => {
+    renderHarness(true)
+    await waitFor(() => expect(view).not.toBeNull())
+    act(() => {
+      view!.submitFiles([fileNamed('a.txt')], 9)
+    })
+    expect(await screen.findByTestId('upload-target')).toHaveTextContent('保存到：目录 9')
+    act(() => posts[0]?.resolve(jsonResponse(200, { id: 3 })))
   })
 })
