@@ -3,13 +3,18 @@
 // 原样保留的旧语义：
 // ① 阈值 `file.size >= 49MiB` 走 multipart，否则直传（旧 497 行，>= 非 >）；
 // ② 续传匹配四字段 name/size/lastModified/folderID + expiresAt 未过期（旧 512-514）；
-// ③ progress.status 2=正在恢复合并→直接 complete+forget / 3=forget+收敛（旧版即不再上传该文件，忠实移植）/
-//    4=forget 后全新 start / 其余=续传（uploaded_parts 去重）（旧 516-533）；
+// ③ progress.status 2=正在恢复合并→直接 complete+forget / 3=已完成（StatusCompleted，文件已由服务端合并；
+//    修复轮 1 / Minor-5 勘误旧注释「未上传」之误）/ 4=forget 后全新 start / 其余=续传（uploaded_parts 去重）（旧 516-533）；
 // ④ 进度探测仅 404/409 → forget+重开（Review Focus #2），其他错误原样上抛（旧 534-536）；
 // ⑤ 合并阶段不可取消（旧 cancelCurrentUpload:544 status 含「合并」直接 return 的等价：complete 前后不读信号）；
 // ⑥ 取消 → cancelMultipartUpload + forget（旧 552-556）；失败抛原始 ApiError 且续传记录保留（Review Focus #5）。
 // 控制端裁定的改动（plan Task 8）：分片循环由顺序 await 改为并发（默认 3），已传集合去重、
-// 任一失败整任务 reject、记录留可续传；全局 cancelRequested/uploadAbort 改为每任务 AbortSignal（检查点同旧版）。
+// 任一失败整任务 reject、记录留可续传；全局 cancelRequested/uploadAbort 改为每任务 AbortSignal。
+// 修复轮 1（评审 Critical-1 / Important-3）：
+// · 外层 wrapper 统一为**每条** reject 路径 emit failed（含 status-2 恢复合并的 complete、进度探测
+//   非 404/409、startMultipart 三处预-loop 抛出——旧移植此处不发声，队列行冻结「上传中」、busy 恒真）；
+// · 分片失败广播：内部 AbortController 中继 deps.signal 传入 uploadPart，首个真失败即掐兄弟 lane
+//   在途请求并静默终止其后续拉取；lane 全部停稳（allSettled）后才上抛，failed 之后不再有 percent emission。
 import { ApiError } from '@/api/client'
 import type { MultipartUploadProgress, MultipartUploadSession } from '@/api/storage'
 
@@ -109,7 +114,7 @@ export function makeLocalStorageUploadStorage(uid: number | string): UploadStora
 
 /**
  * 单文件上传编排（旧 uploadFiles 循环体 + uploadLargeFile 全分支）。
- * 收敛约定：done/cancelled 走 resolve；仅真失败 reject 原始 ApiError（旧版经 uploadFiles catch 上抛的等价）。
+ * 收敛约定：done/cancelled 走 resolve；reject 仅限真失败，且外层统一先 emit failed（修复轮 1 / Critical-1）。
  * cancelled 的 UI 播报（toast「已取消当前大文件上传。」）与批量记账在队列层（useUploadManager），此处纯逻辑。
  */
 export async function runUpload(
@@ -124,124 +129,156 @@ export async function runUpload(
     onTask({ ...last }) // 拷贝外发：调用方持有快照，不受后续内部更新影响
   }
 
-  // —— 直传路径（旧 497-499 行的 else 分支）：单请求，旧版无中止通道（uploadAbort 仅分片流持有），原样移植 ——
-  if (file.size < MULTIPART_THRESHOLD_BYTES) {
-    emit({ status: 'uploading' })
-    try {
+  const orchestrate = async (): Promise<void> => {
+    // —— 直传路径（旧 497-499 行的 else 分支）：单请求，旧版无中止通道（uploadAbort 仅分片流持有），原样移植；
+    // 抛出（413/507 等原始 ApiError）→ 外层统一 emit failed ——
+    if (file.size < MULTIPART_THRESHOLD_BYTES) {
+      emit({ status: 'uploading' })
       await deps.uploadFile(file, folderID)
-    } catch (error) {
-      emit({ status: 'failed', error: messageOf(error) })
-      throw error // 失败抛原始 ApiError（413/507 文案由 client 的 status-first 分支保证）
-    }
-    emit({ status: 'done', percent: 100 })
-    return
-  }
-
-  // —— multipart 路径（旧 uploadLargeFile:511-558）——
-  emit({ status: 'uploading' }) // 旧 status「准备上传」
-  const matches = (record: SavedUpload): boolean =>
-    record.name === file.name &&
-    record.size === file.size &&
-    record.lastModified === file.lastModified &&
-    record.folderID === folderID
-  const previous = deps.storage.read().find(matches)
-
-  let session: MultipartUploadSession | undefined
-  const uploadedParts = new Set<number>()
-
-  if (previous && Date.parse(previous.expiresAt) > Date.now()) {
-    try {
-      const progress = await deps.getProgress(previous.id)
-      if (progress.status === 2) {
-        // 「正在恢复合并」：合并阶段禁断 → 此分支全程不读信号（旧 516-521）
-        emit({ status: 'merging' })
-        await deps.complete(previous.id)
-        deps.storage.forget(previous.id)
-        emit({ status: 'done', percent: 100 })
-        return
-      }
-      if (progress.status === 3) {
-        // 忠实移植旧 523-526：forget + return（文件实际未上传，旧版按批次「已完成」收敛，行为等价保留）
-        deps.storage.forget(previous.id)
-        emit({ status: 'done', percent: 100 })
-        return
-      }
-      if (progress.status === 4) {
-        deps.storage.forget(previous.id) // forget 后落入下方「if (!session) start」全新开
-      } else {
-        session = { id: progress.id, part_size: progress.part_size, expires_at: progress.expires_at }
-        for (const n of progress.uploaded_parts) uploadedParts.add(n)
-        emit({ percent: partPercent(uploadedParts.size, totalPartsOf(file.size, session.part_size)) }) // 「续传中 · 已确认 x/y」→ percent 快照
-      }
-    } catch (error) {
-      if (!(error instanceof ApiError) || (error.status !== 404 && error.status !== 409)) throw error
-      deps.storage.forget(previous.id) // Review Focus #2：仅 404/409 forget，重开全新会话
-    }
-    if (!session) session = await deps.startMultipart(file, folderID)
-  } else {
-    if (previous) deps.storage.forget(previous.id) // 过期记录清理（旧 537）
-    session = await deps.startMultipart(file, folderID)
-  }
-
-  const active = session
-  deps.storage.save({
-    id: active.id,
-    name: file.name,
-    size: file.size,
-    lastModified: file.lastModified,
-    folderID,
-    expiresAt: active.expires_at,
-  })
-  const total = totalPartsOf(file.size, active.part_size)
-
-  // 分片并发池：pending = 1..total 减去已确认集合（去重续传）；worker 每轮取号前读信号，
-  // 任一失败整任务 reject（Promise.all 首败即出），已传分片留在服务端 + 记录未 forget → 重试续传。
-  const runParts = async (): Promise<void> => {
-    const pending: number[] = []
-    for (let n = 1; n <= total; n++) {
-      if (!uploadedParts.has(n)) pending.push(n)
-    }
-    emit({ percent: partPercent(uploadedParts.size, total) })
-    let cursor = 0
-    const worker = async (): Promise<void> => {
-      for (;;) {
-        if (deps.signal.aborted) throw abortError() // 旧循环首行 cancelRequested 检查的并发等价
-        const n = pending[cursor]
-        if (n === undefined) return
-        cursor += 1
-        const start = (n - 1) * active.part_size
-        const part = file.slice(start, Math.min(start + active.part_size, file.size))
-        await deps.uploadPart(active.id, n, part, deps.signal)
-        uploadedParts.add(n)
-        emit({ percent: partPercent(uploadedParts.size, total) }) // 旧 546-547「已确认 x/y」→ percent 单调
-      }
-    }
-    const lanes = Math.max(1, Math.min(deps.partConcurrency ?? DEFAULT_PART_CONCURRENCY, pending.length))
-    await Promise.all(Array.from({ length: lanes }, () => worker()))
-  }
-
-  try {
-    if (deps.signal.aborted) throw abortError() // 旧 save 记录后第一处检查（539）
-    await runParts()
-    if (deps.signal.aborted) throw abortError() // 旧 complete 前第二处检查（548）；此后进入合并阶段，信号不再被读取
-    emit({ status: 'merging' }) // 「正在合并文件」
-    await deps.complete(active.id) // 合并阶段不可取消（旧 544）：abort 到达也等它跑完
-    deps.storage.forget(active.id)
-    emit({ status: 'done', percent: 100 })
-  } catch (error) {
-    if (deps.signal.aborted) {
-      // 取消分支（旧 552-556）：cancelMultipartUpload + forget，任务以 cancelled 收敛（不 reject）。
-      // 旧版 cancel 接口失败仅覆盖 errorMessage——此处等价：吞掉 cancel 错误仍 forget。
-      emit({ status: 'cancelled' })
-      try {
-        await deps.cancel(active.id)
-      } catch {
-        /* 取消接口失败：记录照常 forget，服务端会话由过期自清 */
-      }
-      deps.storage.forget(active.id)
+      emit({ status: 'done', percent: 100 })
       return
     }
-    // 真失败：抛原始 ApiError、记录保留（不 forget）——重试/重选文件即从 uploaded_parts 续传（Review Focus #5）
+
+    // —— multipart 路径（旧 uploadLargeFile:511-558）——
+    emit({ status: 'uploading' }) // 旧 status「准备上传」
+    const matches = (record: SavedUpload): boolean =>
+      record.name === file.name &&
+      record.size === file.size &&
+      record.lastModified === file.lastModified &&
+      record.folderID === folderID
+    const previous = deps.storage.read().find(matches)
+
+    let session: MultipartUploadSession | undefined
+    const uploadedParts = new Set<number>()
+
+    if (previous && Date.parse(previous.expiresAt) > Date.now()) {
+      try {
+        const progress = await deps.getProgress(previous.id)
+        if (progress.status === 2) {
+          // 「正在恢复合并」：合并阶段禁断 → 此分支全程不读信号（旧 516-521）。
+          // complete 抛错（如分片不全 400）原样上抛，由外层 emit failed（修复轮 1 / Critical-1 三处之一）。
+          emit({ status: 'merging' })
+          await deps.complete(previous.id)
+          deps.storage.forget(previous.id)
+          emit({ status: 'done', percent: 100 })
+          return
+        }
+        if (progress.status === 3) {
+          // 修复轮 1 / Minor-5 勘误：status 3 = StatusCompleted——文件已由服务端**完成合并**，
+          // 旧版 523-526 的 forget+return（不再重复上传）本来就是正确行为，非「文件未上传」的怪癖。
+          deps.storage.forget(previous.id)
+          emit({ status: 'done', percent: 100 })
+          return
+        }
+        if (progress.status === 4) {
+          deps.storage.forget(previous.id) // forget 后落入下方「if (!session) start」全新开
+        } else {
+          session = { id: progress.id, part_size: progress.part_size, expires_at: progress.expires_at }
+          for (const n of progress.uploaded_parts) uploadedParts.add(n)
+          emit({ percent: partPercent(uploadedParts.size, totalPartsOf(file.size, session.part_size)) }) // 「续传中 · 已确认 x/y」→ percent 快照
+        }
+      } catch (error) {
+        if (!(error instanceof ApiError) || (error.status !== 404 && error.status !== 409)) throw error
+        deps.storage.forget(previous.id) // Review Focus #2：仅 404/409 forget，重开全新会话
+      }
+      // 预-loop 抛出点之二/之三：startMultipart 失败（507 配额等）→ 外层 failed，不落记录、不传分片
+      if (!session) session = await deps.startMultipart(file, folderID)
+    } else {
+      if (previous) deps.storage.forget(previous.id) // 过期记录清理（旧 537）
+      session = await deps.startMultipart(file, folderID)
+    }
+
+    const active = session
+    deps.storage.save({
+      id: active.id,
+      name: file.name,
+      size: file.size,
+      lastModified: file.lastModified,
+      folderID,
+      expiresAt: active.expires_at,
+    })
+    const total = totalPartsOf(file.size, active.part_size)
+
+    // 分片并发池（修复轮 1 / Important-3）：
+    // 内部 partController = deps.signal 的中继 + 首败广播通道；uploadPart 一律收内部信号，
+    // 真失败由首个 lane 广播 abort：兄弟 lane 在途请求被掐、循环顶见到即静默返回（不再拉新分片、
+    // 不再 emit）。Promise.allSettled 等全部 lane 停稳后才带上抛 → failed 之后绝无残留 percent emission。
+    const runParts = async (): Promise<void> => {
+      const pending: number[] = []
+      for (let n = 1; n <= total; n++) {
+        if (!uploadedParts.has(n)) pending.push(n)
+      }
+      const percent = (): number => partPercent(uploadedParts.size, total)
+      emit({ percent: percent() })
+      const partController = new AbortController()
+      const relay = (): void => partController.abort()
+      deps.signal.addEventListener('abort', relay)
+      if (deps.signal.aborted) relay() // 入池前已取消的兜底（外层检查点在前，双保险）
+      let cursor = 0
+      const worker = async (): Promise<void> => {
+        for (;;) {
+          if (deps.signal.aborted) throw abortError() // 用户取消 → 下方 catch 走 cancel 收敛（旧循环首行检查等价）
+          if (partController.signal.aborted) return // 兄弟首败广播 → 静默退场（Important-3）
+          const n = pending[cursor]
+          if (n === undefined) return
+          cursor += 1
+          const start = (n - 1) * active.part_size
+          const part = file.slice(start, Math.min(start + active.part_size, file.size)) // 尾片截到 file.size（Important-4 测试钉死偏移/大小）
+          try {
+            await deps.uploadPart(active.id, n, part, partController.signal)
+          } catch (error) {
+            if (deps.signal.aborted) throw abortError() // 取消掐出的 AbortError → cancel 收敛路径
+            if (partController.signal.aborted) return // 在途片被首败广播掐掉 → 静默（原始错误由肇事 lane 上报）
+            partController.abort() // 首个真失败：广播停摆所有 lane
+            throw error // 原始 ApiError → allSettled 汇总后上抛 → 外层 failed，记录保留可续传（Review Focus #5）
+          }
+          uploadedParts.add(n)
+          emit({ percent: percent() }) // 旧 546-547「已确认 x/y」→ percent 单调
+        }
+      }
+      const lanes = Math.max(1, Math.min(deps.partConcurrency ?? DEFAULT_PART_CONCURRENCY, pending.length))
+      try {
+        const settled = await Promise.allSettled(Array.from({ length: lanes }, () => worker()))
+        const failure = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+        if (failure) throw failure.reason // 多 lane 同败取首个 rejection（整任务 reject 原始错误语义不变）
+      } finally {
+        deps.signal.removeEventListener('abort', relay)
+      }
+    }
+
+    try {
+      if (deps.signal.aborted) throw abortError() // 旧 save 记录后第一处检查（539）
+      await runParts()
+      if (deps.signal.aborted) throw abortError() // 旧 complete 前第二处检查（548）
+      emit({ status: 'merging' }) // 「正在合并文件」——此后信号不再被读取（旧 544「合并禁断」，用例⑥）
+      await deps.complete(active.id)
+      deps.storage.forget(active.id)
+      emit({ status: 'done', percent: 100 })
+    } catch (error) {
+      if (deps.signal.aborted) {
+        // 取消分支（旧 552-556）：emit cancelled + cancelMultipartUpload + forget，任务以 cancelled 收敛（不 reject）。
+        // 修复轮 1 / Minor-8 勘误：**有意偏离**旧版的无条件 forget——旧版把 forget 放在 cancel 的 try 块内，
+        // cancel 接口失败时记录会残留；原注释声称等价是错的。偏离保留的理由：残留记录反而挡住重新上传，
+        // 自愈统一交给续传时进度探测 404/409 → forget+重开（分支④ / Review Focus #2）路径承担。
+        emit({ status: 'cancelled' })
+        try {
+          await deps.cancel(active.id)
+        } catch {
+          /* cancel 接口失败：不再上抛——已广播取消，任务语义即 cancelled */
+        }
+        deps.storage.forget(active.id)
+        return
+      }
+      throw error // 真失败：由外层 wrapper 统一 emit failed + 原样上抛
+    }
+  }
+
+  // 修复轮 1 / Critical-1：所有逃逸出 orchestrate 的 rejection（直传失败、进度探测非 404/409、
+  // status-2 恢复合并的 complete、startMultipart、分片失败、合并失败）都先以 failed 行收敛再原样上抛。
+  // cancelled 在上一步已内部收敛（resolve），不会走到这里。
+  try {
+    await orchestrate()
+  } catch (error) {
     emit({ status: 'failed', error: messageOf(error) })
     throw error
   }

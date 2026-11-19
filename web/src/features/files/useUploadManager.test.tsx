@@ -194,6 +194,41 @@ describe('useUploadManager：串行队列与缓存失效', () => {
     expect(view!.tasks[1]?.status).toBe('cancelled')
   })
 
+  it('修复轮 1 / Important-2：批次熔断后新的 submitFiles 恢复泵送（不再搁浅 queued 行与后续文件）', async () => {
+    renderHarness(false)
+    await waitFor(() => expect(view).not.toBeNull())
+
+    // 批次 1：fail.txt 500 熔断 → ok1.txt 滞留 queued，队列停摆
+    act(() => {
+      view!.submitFiles([fileNamed('fail.txt'), fileNamed('ok1.txt')], 0)
+    })
+    await waitForPosts(1)
+    act(() => {
+      posts[0]!.resolve(jsonResponse(500, { error: 'db down' }))
+    })
+    await waitFor(() => expect(view!.tasks[0]?.status).toBe('failed'))
+    expect(view!.tasks[1]?.status).toBe('queued')
+
+    // 用户重新提交 ok2.txt → 必须恢复泵送（原队列里滞留的 ok1 先跑，随后 ok2）
+    act(() => {
+      view!.submitFiles([fileNamed('ok2.txt')], 0)
+    })
+    await waitForPosts(2)
+    expect(posts[1]!.name).toBe('ok1.txt') // 熔断解除后队列自然续跑，不吞新意图
+    act(() => {
+      posts[1]!.resolve(jsonResponse(200, { id: 21 }))
+    })
+    await waitForPosts(3)
+    expect(posts[2]!.name).toBe('ok2.txt')
+    act(() => {
+      posts[2]!.resolve(jsonResponse(200, { id: 22 }))
+    })
+
+    await waitFor(() => {
+      expect(view!.tasks.map((t) => t.status)).toEqual(['failed', 'done', 'done'])
+    })
+  })
+
   it('submitFiles 空数组零副作用；openPicker 无挂载 input 时安全 no-op', async () => {
     renderHarness(false)
     await waitFor(() => expect(view).not.toBeNull())

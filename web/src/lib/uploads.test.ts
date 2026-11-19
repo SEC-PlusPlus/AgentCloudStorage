@@ -23,9 +23,33 @@ const LAST_MODIFIED = 1700000000000
 const FOLDER = 3
 const FAR_FUTURE = '2099-01-01T00:00:00Z'
 
+/** 纯 Promise 世界的轮询等待（本文件不依赖 RTL，自带最小 waitFor）。 */
+async function waitFor(assertion: () => void, timeoutMs = 2000): Promise<void> {
+  const start = Date.now()
+  for (;;) {
+    try {
+      assertion()
+      return
+    } catch (error) {
+      if (Date.now() - start > timeoutMs) throw error
+      await new Promise((r) => setTimeout(r, 10))
+    }
+  }
+}
+
 /** 无头环境不依赖真 Blob：runUpload 只读 name/size/lastModified 与 slice() 边界。 */
 function makeFile(size: number, name = NAME, lastModified = LAST_MODIFIED): File {
-  return {
+  return createTrackedFile(size, name, lastModified).file
+}
+
+/** 修复轮 1 / Important-4：slice() 范围可观测版本——ranges 记录每次切片的 [start, end]，
+ *  返回 Blob 桩的 size 即 end−start，供逐片偏移/尾片断言（named risk：尾片与带洞续传此前未验）。 */
+function createTrackedFile(size: number, name = NAME, lastModified = LAST_MODIFIED): {
+  file: File
+  ranges: Array<[number, number]>
+} {
+  const ranges: Array<[number, number]> = []
+  const file = {
     name,
     size,
     lastModified,
@@ -33,9 +57,11 @@ function makeFile(size: number, name = NAME, lastModified = LAST_MODIFIED): File
     slice: (start?: number, end?: number) => {
       const s = start ?? 0
       const e = end ?? size
+      ranges.push([s, e])
       return { size: e - s } as unknown as Blob
     },
   } as unknown as File
+  return { file, ranges }
 }
 
 function bigFile(): File {
@@ -165,7 +191,8 @@ describe('runUpload：阈值分流与直传（用例①）', () => {
 describe('runUpload：全新完整 multipart 流程（用例②）', () => {
   it('start→分片→complete→forget；percent 单调；记录先 save 后 forget', async () => {
     const h = createHarness()
-    await h.run()
+    const tracked = createTrackedFile(BIG_SIZE)
+    await h.run(tracked.file)
 
     expect(h.deps.startMultipart).toHaveBeenCalledTimes(1)
     expect(h.deps.getProgress).not.toHaveBeenCalled() // 无历史记录不发进度探测
@@ -173,7 +200,18 @@ describe('runUpload：全新完整 multipart 流程（用例②）', () => {
     expect(new Set(partNumbers(h))).toEqual(new Set([1, 2, 3, 4, 5, 6, 7]))
     const partCalls = (h.deps.uploadPart as ReturnType<typeof vi.fn>).mock.calls
     expect(partCalls[0]?.[0]).toBe('up-1')
-    expect(partCalls[0]?.[3]).toBe(h.controller.signal) // 分片用注入 signal（取消通道）
+    // 修复轮 1 / Important-3：分片收到的是内部中继信号（联动 deps.signal + 首败广播），非直连外部 signal
+    expect(partCalls[0]?.[3]).toBeInstanceOf(AbortSignal)
+
+    // 修复轮 1 / Important-4：切片范围逐片钉死——偏移 (n−1)×part_size，尾片截到 file.size（49MiB−48MiB=1MiB）
+    const expectedRanges = Array.from({ length: TOTAL_PARTS }, (_, i) => [
+      i * PART_SIZE,
+      Math.min((i + 1) * PART_SIZE, BIG_SIZE),
+    ] as [number, number])
+    expect([...tracked.ranges].sort((a, b) => a[0] - b[0])).toEqual(expectedRanges)
+    const blobSizeByPart = new Map(partCalls.map((call) => [call[1], (call[2] as Blob).size]))
+    expect(blobSizeByPart.get(7)).toBe(1 * MiB)
+    for (const n of [1, 2, 3, 4, 5, 6]) expect(blobSizeByPart.get(n)).toBe(PART_SIZE)
 
     expect(h.deps.complete).toHaveBeenCalledWith('up-1')
     expect(h.deps.cancel).not.toHaveBeenCalled()
@@ -208,12 +246,26 @@ describe('runUpload：续传记录命中（用例③）', () => {
     const h = createHarness()
     seedPrevious(h)
     h.progress.uploaded_parts = [2, 5]
-    await h.run()
+    const tracked = createTrackedFile(BIG_SIZE)
+    await h.run(tracked.file)
 
     expect(h.deps.getProgress).toHaveBeenCalledWith('up-1')
     expect(h.deps.startMultipart).not.toHaveBeenCalled() // 续传用 progress 回给的 session
     expect(partNumbers(h)).toHaveLength(TOTAL_PARTS - 2)
     expect(new Set(partNumbers(h))).toEqual(new Set([1, 3, 4, 6, 7]))
+    // 修复轮 1 / Important-4：带洞续传的切片偏移=按原始编号（跳过 2/5 不移位），尾片仍 1MiB
+    const partCalls = (h.deps.uploadPart as ReturnType<typeof vi.fn>).mock.calls
+    const blobSizeByPart = new Map(partCalls.map((call) => [call[1], (call[2] as Blob).size]))
+    expect([...blobSizeByPart.keys()].sort()).toEqual([1, 3, 4, 6, 7])
+    expect(blobSizeByPart.get(7)).toBe(1 * MiB)
+    for (const n of [1, 3, 4, 6]) expect(blobSizeByPart.get(n)).toBe(PART_SIZE)
+    expect([...tracked.ranges].sort((a, b) => a[0] - b[0])).toEqual([
+      [0, PART_SIZE],
+      [2 * PART_SIZE, 3 * PART_SIZE],
+      [3 * PART_SIZE, 4 * PART_SIZE],
+      [5 * PART_SIZE, 6 * PART_SIZE],
+      [6 * PART_SIZE, BIG_SIZE],
+    ])
     expect(h.deps.complete).toHaveBeenCalledWith('up-1')
     // 续传起点 percent 直接反映已确认分片（2/7 → 28%）
     expect(h.tasks.some((t) => t.percent === Math.floor((2 / TOTAL_PARTS) * 100))).toBe(true)
@@ -257,7 +309,7 @@ describe('runUpload：progress.status 分支与进度探测错误（用例④⑤
     expect(statuses.at(-1)).toBe('done')
   })
 
-  it('status=3 → forget + 结束（忠实旧版：文件不再上传、任务正常收敛）', async () => {
+  it('status=3（StatusCompleted：服务端已完成合并）→ forget + done 收敛（修复轮 1 / Minor-5 勘误注释）', async () => {
     const h = createHarness()
     seedPrevious(h)
     h.progress.status = 3
@@ -297,7 +349,7 @@ describe('runUpload：progress.status 分支与进度探测错误（用例④⑤
     }
   })
 
-  it('进度探测非 404/409（如 500）→ 原样上抛：不 forget、不 start（Review Focus #2 反例锁）', async () => {
+  it('进度探测非 404/409（如 500）→ 原样上抛：不 forget、不 start、task 收敛 failed（Review Focus #2 反例锁）', async () => {
     const err = new ApiError('服务暂时遇到问题，请稍后重试。', 500)
     const h = createHarness({
       getProgress: vi.fn(async (): Promise<MultipartUploadProgress> => {
@@ -309,6 +361,74 @@ describe('runUpload：progress.status 分支与进度探测错误（用例④⑤
     expect(h.deps.storage.forget).not.toHaveBeenCalled()
     expect(h.deps.startMultipart).not.toHaveBeenCalled()
     expect(h.records).toHaveLength(1)
+    expect(h.tasks.at(-1)!.status).toBe('failed') // 修复轮 1 / Critical-1：预-loop 抛出也必须离开 uploading
+  })
+})
+
+describe('runUpload：预-loop 失败统一收敛 failed（修复轮 1 / Critical-1）', () => {
+  it('status=2 恢复合并分支 complete 抛错 → reject 原始错误 + task failed（不再冻结 uploading 行）', async () => {
+    const err = new ApiError('文件分片尚未全部上传，请重试未完成的分片。', 400)
+    const h = createHarness({
+      complete: vi.fn(async () => {
+        throw err
+      }),
+    })
+    seedPrevious(h)
+    h.progress.status = 2
+    await expect(h.run()).rejects.toBe(err)
+    expect(h.deps.storage.forget).not.toHaveBeenCalled()
+    expect(h.deps.startMultipart).not.toHaveBeenCalled()
+    expect(h.deps.uploadPart).not.toHaveBeenCalled()
+    const statuses = h.tasks.map((t) => t.status)
+    expect(statuses).toContain('merging') // 进入了恢复合并
+    expect(h.tasks.at(-1)).toMatchObject({ status: 'failed', error: err.message })
+  })
+
+  it('startMultipart 507（配额）→ reject 原始 ApiError + task failed：不落记录、不传分片', async () => {
+    const err = new ApiError('云仓可用存储空间不足。', 507)
+    const h = createHarness({
+      startMultipart: vi.fn(async (): Promise<MultipartUploadSession> => {
+        throw err
+      }),
+    })
+    await expect(h.run()).rejects.toBe(err)
+    expect(h.deps.storage.save).not.toHaveBeenCalled()
+    expect(h.deps.uploadPart).not.toHaveBeenCalled()
+    expect(h.deps.complete).not.toHaveBeenCalled()
+    expect(h.records).toHaveLength(0)
+    expect(h.tasks.at(-1)).toMatchObject({ status: 'failed', error: '云仓可用存储空间不足。' })
+  })
+})
+
+describe('runUpload：兄弟 lane 首败广播停止（修复轮 1 / Important-3）', () => {
+  it('分片 2 失败 → 并发窗口外的分片绝不再启动；percent 不再增长；failed 只发一次', async () => {
+    const err = new ApiError('服务暂时遇到问题，请稍后重试。', 500)
+    const gates = new Map<number, { resolve: () => void; reject: (e: unknown) => void }>()
+    const seenSignals: AbortSignal[] = []
+    const h = createHarness({
+      uploadPart: vi.fn(async (_id: string, n: number, _part: Blob, signal: AbortSignal) => {
+        seenSignals.push(signal)
+        await new Promise<void>((resolve, reject) => {
+          gates.set(n, { resolve, reject })
+        })
+      }),
+    })
+    const runPromise = h.run()
+    // 三 lane 同步各拉一片（并发=3）：等待观测到 1/2/3 全部开播
+    await waitFor(() => expect(seenSignals).toHaveLength(3))
+    gates.get(2)!.reject(err) // 片 2 真失败（非用户取消）
+    gates.get(1)!.resolve()
+    gates.get(3)!.resolve()
+
+    await expect(runPromise).rejects.toBe(err)
+    expect(partNumbers(h)).toEqual([1, 2, 3]) // 4..7 从未被任何 lane 拉取（修复前此断言挂：w1/w3 会继续爬 4/5）
+    const statuses = h.tasks.map((t) => t.status)
+    expect(statuses.filter((s) => s === 'failed')).toHaveLength(1)
+    expect(statuses.at(-1)).toBe('failed') // failed 之后无任何 emission → percent 不再增长
+    expect(h.deps.complete).not.toHaveBeenCalled()
+    expect(h.deps.cancel).not.toHaveBeenCalled()
+    expect(h.records).toHaveLength(1) // 失败仍保留续传记录（Review Focus #5 契约不受影响）
+    expect(seenSignals.every((s) => s.aborted)).toBe(true) // 失败广播也掐断了在途请求的信号
   })
 })
 

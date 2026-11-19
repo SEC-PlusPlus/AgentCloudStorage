@@ -91,6 +91,16 @@ function pump(): void {
     .catch((error: unknown) => {
       halted = true // 旧 uploadFiles catch：批次中断，其余文件留 queued（不再静默丢弃——行可见可重试）
       const detail = error instanceof Error ? error.message : String(error)
+      // 修复轮 1 / Critical-1 兜底：runUpload 已保证每条 reject 路径 emit failed，此处再防一手
+      // 「行冻结 uploading」整类问题——行此刻已不在 queue、controller 已被 finally 清理，
+      // 若停在 uploading/merging 则取消/重试双失效、busy 恒真。
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === entry.rowId && (t.status === 'uploading' || t.status === 'merging')
+            ? { ...t, status: 'failed' as const, error: detail }
+            : t,
+        ),
+      )
       toast.error(batchUploaded > 0 ? `已上传 ${batchUploaded} 个文件，其余失败：${detail}` : detail)
     })
     .finally(() => {
@@ -103,9 +113,12 @@ function pump(): void {
 /** 入队并尝试开跑。folderID=投放时刻的当前目录（旧 uploadFiles 用 folderID.value 同义）。 */
 export function submitFiles(files: File[], folderID: number): void {
   if (files.length === 0) return
-  if (activeRowId === null && queue.length === 0) {
-    batchUploaded = 0 // 全新批次
+  // 修复轮 1 / Important-2：halted 熔断只在「没有正在跑的文件」时被新的用户意图清除——
+  // 此前要求队列同时为空，导致批次失败留下 queued 行后、新提交被搁浅永不泵送（queued 行 UI 又无重试入口）。
+  // batchUploaded 仍仅在全新批次（队列亦为空）时清零；残留 queued 行随队列原序续跑。
+  if (activeRowId === null) {
     halted = false
+    if (queue.length === 0) batchUploaded = 0
   }
   const rows: UploadTask[] = files.map((file) => {
     const rowId = `task-${(seq += 1)}`
