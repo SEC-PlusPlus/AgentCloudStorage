@@ -1,6 +1,8 @@
-// 401 接线单测（Task 4 Step 3 / Review Focus #1 收口）：
-// jsdom 渲染整棵 Provider 树 → 在 AppLayout 内触发真实 api（getStorageUsage，fetch 桩 401）
-// → 断言会话清空、路由到 /login、sonner toast「登录已过期」DOM 存在。
+// 401 接线单测（Task 4 Step 3 / Review Focus #1 收口；Task 7 控制端附带修复：桩改 URL+开关感知）。
+// 背景：Task 7 前 /files 是占位 div，TopBar ['usage'] 是挂载期唯一 fetch，故旧桩用「首个调用 200、
+// 其余 401」的位置序承接自动请求——真实文件列表挂载后 files/folders/usage 并发且顺序不定，位置序失效。
+// 现桩按 URL 路由响应：usage 由 failUsage401 开关显式控制（默认 200），files/folders 恒 200 空列表，
+// 401 只在用例主动开开关后触发，保持「手动触发才走 401 分支」的原有语义。全部 401 断言原样保留。
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { createMemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -22,25 +24,35 @@ function loginSession(): void {
   })
 }
 
+function jsonResponse(status: number, body: unknown): Response {
+  return { ok: status >= 200 && status < 300, status, json: async () => body } as unknown as Response
+}
+
+/** 401 触发开关：默认关（usage 200）；用例在需要时显式置 true——不再依赖调用顺序。 */
+let failUsage401 = false
+
 describe('401 接线：unauthorizedHandler → 清会话 + 跳 /login + toast（Review Focus #1）', () => {
   beforeEach(() => {
     loginSession()
-    // Task 6 起 AppLayout/TopBar 挂载即自动拉 ['usage']（用量条）：首调用 OK 承接该自动请求，
-    // 之后的调用（本测试手动触发）返回 401，保持「手动触发才走 401 分支」的原有语义。
+    failUsage401 = false
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValueOnce({
-          ok: true,
-          status: 200,
-          json: async () => ({ used_bytes: 1024, quota_bytes: 4096 }),
-        })
-        .mockResolvedValue({
-          ok: false,
-          status: 401,
-          json: async () => ({ error: 'token expired' }),
-        }),
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.startsWith('/api/v1/storage/usage')) {
+          return failUsage401
+            ? jsonResponse(401, { error: 'token expired' })
+            : jsonResponse(200, { used_bytes: 1024, quota_bytes: 4096 })
+        }
+        if (url.startsWith('/api/v1/files') || url.startsWith('/api/v1/folders')) {
+          // Task 7 起 /files 真实挂载：files 分页列表 / folders 子目录列表恒 200 空数据。
+          const body = url.startsWith('/api/v1/folders')
+            ? { items: [] }
+            : { items: [], pagination: { page: 1, page_size: 20, total: 0 } }
+          return jsonResponse(200, body)
+        }
+        throw new Error(`unexpected fetch: ${url}`)
+      }),
     )
   })
 
@@ -54,9 +66,10 @@ describe('401 接线：unauthorizedHandler → 清会话 + 跳 /login + toast（
     const router = createMemoryRouter(routeObjects, { initialEntries: ['/files'] })
     render(<AppProviders router={router} />)
 
-    // 等到 AppLayout（挂载效应注册 handler）与 /files 占位渲染完成
+    // 等到 AppLayout（挂载效应注册 handler）与 /files 真实列表渲染完成
     await screen.findByTestId('files-route')
 
+    failUsage401 = true
     await act(async () => {
       await getStorageUsage().catch(() => undefined) // request 401 分支：notifyUnauthorized() + ApiError 上抛
     })
@@ -83,6 +96,7 @@ describe('401 接线：unauthorizedHandler → 清会话 + 跳 /login + toast（
 
     // 处理器已置 null：request 的 401 分支仍上抛 ApiError，但不应触发任何跳转/清会话
     loginSession()
+    failUsage401 = true
     await act(async () => {
       await getStorageUsage().catch(() => undefined)
     })
