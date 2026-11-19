@@ -22,6 +22,8 @@
 
 | 2026-11-19 | Task 14-final-fixes (c74d858..6fd6bb2) | Task 14 终评修波：3 行为修复 + 6 注释/文档修 | **行为（RED-first，3 新锚先败后绿）**：① LoginForm 提交缝 `login(email.trim(), password)` 对齐旧 adbcfba AuthPage:19——粘贴带首尾空格邮箱不再原样送达后端（「邮箱格式不正确」类中文误触根因）；login-flow 锚钉在缝上（jsdom 双偏差绕行备案：email 在 set 时剪空格、validity 判带空格值 invalid 拦 submit，浏览器规范均不然——value-getter 覆写 + 原生 dispatchEvent 复现合规浏览器通路，组件逻辑零旁路）；② DropOverlay 补 window `dragcancel`→depth=0+隐藏（Esc/OS 取消拖拽不发 drop、leave 不成对，原实现 depth 滞留 1 → 全屏遮罩卡死至下轮拖拽周期；teardown 同步移除）；files-page 锚以「下轮 enter/leave 正常归零」显证深度确已复位；③ 搜索行源目录副标题回归（旧 FileWorkbench:595 目录 ID·folder_id 的 parity）：FileRow file 变体 additive `folderId`（mergeRows 自 item.folder_id 上行，零额外请求，tsc 全消费方 compile-check，12 处测试字面量同步），FilesTable 仅 keywordMode 在文件名下渲染 muted `small`——`searchSourceLabel` 纯函数与 TrashPage 原目录同纪律（只读传入的 ['navTrail'] 快照：isUsableTrail 命中取尾项名、未命中「目录 <id>」、根冷缓存直给「根目录」，**无 BFS**），FilesPage 渲染期 getQueryData(navTrailKey(id)) 注入。**注释/文档（零行为）**：④ Dock 头注陈旧「搜索命令面板仍 noop」→ onSearch 已接线聚焦 TopBar（C2.6 面板 UI 维持顺延·待换源）；⑤ RowContextMenu onPreview 陈旧「FilesPage 当前注入 noop」→ Task 10 openPreview 三路汇入 PreviewSheet；⑥ 验收 A2 陈旧 206.02 → 修波后实测值（见下行 A1/A2）；⑦ crumbs.ts 60s 注释精确化（终评 Issue #6，行为 ACCEPTED）：refetchInterval=60_000 只自愈**降级链**（name='' 被 isUsableTrail 拒 → BFS 重跑）；rename 旧名链 name 非空、fast-path 直返，60s 重验无效——陈旧界=导航 setTrail 覆盖（行数据真实名重写）∧ gcTime 默认 5min 回收后冷 BFS；⑧ standards §2 命名规则按仓库实际钉定（PascalCase 组件件 / use 前缀 camelCase hook 件 / kebab 纯模块，修订行备案、不回迁改名）+ §5 查询键引文 ['crumbs',folderId] → ['navTrail',folderId]（crumbs.ts navTrailKey 现行键）；⑨ feature-progress.md（Vue 时代历史档）顶部加「历史文档」一行横幅指向本表。 | §5.1、§5.2、§6、§8 | `npm test -- --run` 25 files / **298 passed**（基线 295 + 修波 3 新锚；RED 复核：trim 锚在还原未修 LoginForm 下确红）；`npm run build`（tsc -b + vite）**0 错误**；JS gzip **206.17 KB < 250 KB**（终评修波后 HEAD 实测）；输出 pristine 零告警 |
 
+| 2026-11-20 | Task 1-A (1506bc7..580375a) | Task 1-A 布局密度：宽度 1440 / 行首类型图标 / 列表容器内滚吸顶 / 间距节奏 | FilesPage+TrashPage 容器 `max-w-5xl→max-w-[1440px]`、`gap-4→gap-3`（1440 屏 ≥1360 可用宽基线）；AppLayout main `p-6→p-4`（`pb-28` dock 预留带保留——列表改内滚后不再叠加留白感知）。新建 `lib/file-icons.ts`：`fileIcon(name, contentType)`/`classifyFileIcon`/`FOLDER_ICON`/`FILE_ICON_TONE_CLASS` 纯函数表——扩展名提取直接 import preview-kind `extensionOf`（无点=整名旧语义同源，**不改其导出面**），image/video/text 三集逐字复用其导出数组防漂移，audio/archive/code 图标族新建（仅图标分类，不参与预览判定），mime 第二判据 + 跨族判序镜像 preview-kind Minor-4 纪律（image>video>audio>pdf>archive>code）；octet/未知 → File 兜底。**icon-frame 缺位裁定**：不在 vendored 31 件清单、全包 grep 0 命中、registry 不可达（A3）无法补拉 → 按 brief 降级 span+类名自绘托底层，registry swap 窗口统一替换（色相偏离 tokens-only 系 tokens 实存仅 6 色无 type 语义色，沿用 vendored table.js rowTone 同款 hue 词汇表 sky/emerald/amber/rose + violet 扩，头注备案）。FilesTable：行首独立图标列（表头/加载骨架同步 5 列同构防列宽跳动；文件夹=accent、文件按类型色相；名按钮行内图标上移至图标列，**按钮可访问名不变**→既有 role/text 锚零改写）；`LIST_SCROLL_OFFSET_PX=272` 单源导出（注释逐项：TopBar≈56 + p-4=16 + 页头≈32 + gap12 + 分页≈44 + pb-28=112；TrashPage 共享）——Tailwind v4 扫描器不识别运行时拼接 arbitrary 类，故 `display:contents` 层注 CSS 变量 + 静态字面量 `max-h-[var(--file-list-max-h)]`（产物 CSS 实测含该类与全部色相 utilities）；数据表+加载表 `stickyHeader`+内滚容器类。TrashPage：主表同款内滚/吸顶；行图标走共享 file-icons（回收站无勾选列→保留行内位不开独立列）。锚：file-icons 31 例（表驱动+无扩展/大写/octet 兜底/判序）+ FilesTable 图标列/吸顶/滚动类 1 例 + trash 图标分流/滚动/密度类 1 例 + files-page 浏览态密度 1 例。 | §5.2、§7.2（布局精化）、§10（玻璃分层不动） | `npm test -- --run` 26 files / **331 passed**（基线 298 + 本任务 33 新锚），pristine 零告警（warn/stderr grep 0 命中）；`npm run build` **0 错误**，JS gzip **207.43 KB < 250 KB**（206.17 → +1.26 KB，D27 达标；chunk>500kB 维持 advisory）；矩阵新增 C11.1/C11.2 待测（宽屏密度目测、内滚吸顶手感），A1/A2 刷至本任务实测 |
+
 ## 验收清单（Task 13b · 2026-11-19）
 
 > 三层：**A** 自动化项（Task 13b 本批已跑）；**B** API 级冒烟（需本地 Go 后端；本批探测 8080 无服务，全部待用户）；**C** 手动浏览器矩阵（用户逐条点击，每条带预期行为一句话；跑完把「待测」改 **PASS**/**FAIL**，FAIL 行附一句现象，回填后并入 changelog 终行）。覆盖 spec §5 全部五屏（登录/外壳/文件工作台/回收站/问答 sheet）+ Review Focus 全 5 项 + 各任务 changelog 挂过的 dev 手测交接项（登录视觉、深链 `?folder=3`、>49MiB 续传/取消/合并锁定、预览四类型+100MiB 守卫、回收站、问答含 IME/停止/500 重试、明暗主题、dock 放大、测帧、emoji 文件名下载）。
@@ -30,8 +32,8 @@
 
 | # | 项目 | 结果 |
 |---|---|---|
-| A1 | `npm test -- --run` 全量 | **298 passed / 25 files**（终评修波后实测 HEAD；295 基线 + 修波 3 新锚），pristine 零告警 |
-| A2 | `npm run build` | **0 错误**；JS gzip **206.17 KB < 250 KB**（终评修波后实测 HEAD，D27 达标）；chunk>500kB 为 vite advisory 提示级非错误 |
+| A1 | `npm test -- --run` 全量 | **331 passed / 26 files**（Task 1-A 后实测 580375a；298 基线 + file-icons 31 + 结构锚 2〔图标列/吸顶/滚动、trash 分流/密度〕；另有并入既有用例的密度类断言不单独计数），pristine 零告警 |
+| A2 | `npm run build` | **0 错误**；JS gzip **207.43 KB < 250 KB**（Task 1-A 后实测 580375a，D27 达标）；chunk>500kB 为 vite advisory 提示级非错误 |
 | A3 | glinui.com registry 探测（C25，累计第 17 次） | 3×20s 全部超时（HTTP 000）→ 不换源，PATH B 维持；下次起统一以 `vendor-glinui.mjs --dry` 退出码记录（修复轮 Minor-5 备案） |
 | A4 | 本地 Go 后端 `127.0.0.1:8080/healthz` | 连接拒绝（本任务纪律：不代起服务）→ B 组转待用户 |
 
@@ -157,3 +159,10 @@
 | C10.1 | 备一个约 150 行数据的目录（批量上传或脚本造） | 列表 20/页，共约 8 页 | 待测 |
 | C10.2 | 1080p 窗口，DevTools Performance → 录制，滚轮持续滚动列表 60 秒（含跨页翻页） | 无 >50ms 长任务持续堆积（偶发 GC 可），帧率观感流畅 | 待测 |
 | C10.3 | 录制中顺带 hover dock 各图标一遍 | magnify 动画不掉帧不卡顿 | 待测 |
+
+**C11 布局密度（Task 1-A · 2026-11-20）**
+
+| # | 步骤 | 预期行为（一行） | 结果 |
+|---|---|---|---|
+| C11.1 | 1440px（或更宽）窗口浏览文件页/回收站：看内容带宽、行首图标列与明暗两主题色相 | 内容列拉满 ~1440px 不再居中窄条；每行图标托底帧着色（文件夹 accent、图/视频/音频/压缩/pdf/代码各异、未知淡色）且明暗两档都可辨；行距/间距观感紧凑不挤 | 待测 |
+| C11.2 | 数据 ≥1 页时滚动：页面无整页滚动条，滚轮作用于列表容器内部；滚到底翻页 | 表头吸顶不动、仅容器内滚；列表底缘不被 dock 遮挡（272px 扣减目测校准点——若列表过短/顶进 dock 记 FAIL 附差值） | 待测 |
