@@ -26,7 +26,9 @@ export const listTrash = (page = 1) =>
   request<PageResult<FileItem>>(`/api/v1/trash?page=${page}&page_size=20`, {}, token())
 export const searchFiles = (keyword: string, page = 1) =>
   request<PageResult<FileItem>>(`/api/v1/files/search?q=${encodeURIComponent(keyword)}&page=${page}&page_size=20`, {}, token())
-export const getStorageUsage = () => request<{ used_bytes: number }>('/api/v1/storage/usage', {}, token())
+// quota_bytes 自后端 1c2b801 起返回（Task 6a）；前端类型同步补齐（Task 6b，外壳用量条消费）。
+export const getStorageUsage = () =>
+  request<{ used_bytes: number; quota_bytes: number }>('/api/v1/storage/usage', {}, token())
 
 export async function uploadFile(file: File, folderId: number) {
   const form = new FormData()

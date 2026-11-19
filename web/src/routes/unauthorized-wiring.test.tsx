@@ -25,13 +25,22 @@ function loginSession(): void {
 describe('401 接线：unauthorizedHandler → 清会话 + 跳 /login + toast（Review Focus #1）', () => {
   beforeEach(() => {
     loginSession()
+    // Task 6 起 AppLayout/TopBar 挂载即自动拉 ['usage']（用量条）：首调用 OK 承接该自动请求，
+    // 之后的调用（本测试手动触发）返回 401，保持「手动触发才走 401 分支」的原有语义。
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 401,
-        json: async () => ({ error: 'token expired' }),
-      }),
+      vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ used_bytes: 1024, quota_bytes: 4096 }),
+        })
+        .mockResolvedValue({
+          ok: false,
+          status: 401,
+          json: async () => ({ error: 'token expired' }),
+        }),
     )
   })
 

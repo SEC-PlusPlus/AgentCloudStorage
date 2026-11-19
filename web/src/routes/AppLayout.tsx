@@ -1,16 +1,18 @@
-// 应用外壳占位（Task 4）：Outlet + 固定背景层 + 401 接线（Review Focus #1）。
-// 背景为 @glinui/tokens 变量的 CSS 占位（R-T4-a2）：TODO(Task 2/6 swap) 换成 vendored
-// AuroraBackground + DotPattern 组件；本任务禁止 import 尚不存在的 @/components/glinui。
+// 应用外壳（Task 4 骨架 + Task 6 实装）：固定背景层 + TopBar（品牌/面包屑/用量）+ Outlet + 底部 Dock。
+// R-T4-a2 背景占位 swap 已兑现：CSS 占位类删除，改用 vendored AuroraBackground + DotPattern（同 LoginRoute 用法）。
+// 401 接线效应原样保留（Review Focus #1）：挂载注册、卸载反注册。
 import { useEffect } from 'react'
 import { Outlet, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { setUnauthorizedHandler } from '@/api/client'
+import { AuroraBackground } from '@/components/glinui/components/aurora-background'
+import { DotPattern } from '@/components/glinui/components/dot-pattern'
+import { Dock } from '@/components/app/Dock'
+import { TopBar } from '@/components/app/TopBar'
 import { authActions } from '@/stores/auth'
-import { useTheme } from '@/providers/theme'
 
 export function AppLayout() {
   const navigate = useNavigate()
-  const { theme, toggle } = useTheme()
 
   useEffect(() => {
     // 401 接线：request/fileContentResponse 的 401 分支 → 清会话 → toast → 跳 /login。
@@ -25,26 +27,23 @@ export function AppLayout() {
 
   return (
     <div className="relative flex min-h-full flex-col">
-      {/* TODO(Task 2/6 swap): vendored AuroraBackground（aurora-background） */}
-      <div aria-hidden className="aurora-placeholder fixed inset-0 -z-10" />
-      {/* TODO(Task 2/6 swap): vendored DotPattern（dot-pattern） */}
-      <div aria-hidden className="dot-pattern-placeholder fixed inset-0 -z-10 opacity-40" />
+      {/* 背景固定一层（规范：内容滚动其上，玻璃分层 §10） */}
+      <div aria-hidden className="fixed inset-0 -z-10">
+        <AuroraBackground
+          colors={['var(--color-accent)', 'var(--color-accent-foreground)', 'var(--color-surface)']}
+          intensity={0.5}
+        />
+        <DotPattern dotColor="var(--glass-border)" dotOpacity={0.35} className="opacity-50" />
+      </div>
 
-      <header className="flex items-center justify-between gap-3 px-6 py-4">
-        <span className="text-sm font-medium text-[var(--color-foreground)]">ACS 个人云存储</span>
-        {/* 主题切换占位入口：Navbar 落地（Task 6）后移入导航条，此处仅 dev 手测持久化用 */}
-        <button
-          type="button"
-          onClick={toggle}
-          className="rounded-[var(--radius-md)] border border-[var(--glass-border)] bg-[var(--glass-2-surface)] px-3 py-1 text-sm text-[var(--color-foreground)]"
-        >
-          切换主题（当前：{theme === 'dark' ? '暗色' : '亮色'}）
-        </button>
-      </header>
+      <TopBar />
 
-      <main className="flex-1 p-6">
+      {/* pb 预留底部 dock 悬浮高度，避免表格末行被 dock 遮挡（spec §5.2 浮条/ dock 同区） */}
+      <main className="flex-1 p-6 pb-28">
         <Outlet />
       </main>
+
+      <Dock />
     </div>
   )
 }
