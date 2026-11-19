@@ -354,3 +354,41 @@ describe('新建文件夹对话框（Dock 接线消费件）', () => {
     expect(sent('POST', /folders/)).toBeFalsy()
   })
 })
+
+describe('预览 sheet 接线（Task 10：双击/右键/键盘三路入口 + 头部操作）', () => {
+  // a.txt=text/plain → fetchTextPreview 走既有 /files/10/content 桩（无 body/Content-Length →
+  // blob.slice 分支），正文「内容」直入 CodePanel；不触碰 createObjectURL。
+  it('双击文件行 → dialog 以文件名命名并显文本正文；关闭按钮收起', async () => {
+    renderPage()
+    await screen.findByText('a.txt')
+    fireEvent.dblClick(screen.getByText('a.txt').closest('tr') as HTMLElement)
+
+    const dialog = await screen.findByRole('dialog', { name: 'a.txt' })
+    expect(await within(dialog).findByText('内容')).toBeInTheDocument()
+    await userEvent.click(within(dialog).getByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('右键「预览」→ 同一 sheet；头部「问 AI」= 评审 minor ⑮ 占位（disabled+aria-disabled+title）', async () => {
+    renderPage()
+    await screen.findByText('a.txt')
+    fireEvent.contextMenu(screen.getByText('a.txt').closest('tr') as HTMLElement)
+    await userEvent.click(await screen.findByRole('menuitem', { name: '预览' }))
+
+    const dialog = await screen.findByRole('dialog', { name: 'a.txt' })
+    const ask = within(dialog).getByRole('button', { name: '问 AI（即将开放）' })
+    expect(ask).toBeDisabled()
+    expect(ask).toHaveAttribute('aria-disabled', 'true')
+    expect(ask).toHaveAttribute('title', 'AI 问答即将开放，敬请期待')
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+  })
+
+  it('⑭ 键盘入口：聚焦文件名按钮 Enter → sheet 打开（单击同按钮亦预览，Task 7 双击缝不回归由上文钉）', async () => {
+    renderPage()
+    await screen.findByText('a.txt')
+    const nameButton = screen.getByRole('button', { name: 'a.txt' })
+    nameButton.focus()
+    await userEvent.keyboard('{Enter}')
+    expect(await screen.findByRole('dialog', { name: 'a.txt' })).toBeInTheDocument()
+  })
+})

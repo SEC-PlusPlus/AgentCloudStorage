@@ -12,6 +12,8 @@
 // onContext→右键菜单（RowContextMenu，隐藏锚点+合成事件开菜单）；重命名/移动/回收站确认三弹窗挂载本页，
 // 失效经 actions.computeInvalidations → applyInvalidations（成功 toast + 错误中文透传双载体，弹窗内
 // errorMessage 载具按评审裁定换为 sonner toast）。旧版行内「更多」下拉的职责由右键菜单承接。
+// Task 10 追加：预览 sheet 接线——previewRow 状态 + openPreview 单点汇入（双击行/右键「预览」/
+// 单击·Enter 文件名按钮三路，评审强制项⑭）；下载/关闭在 sheet 头部自足，问 AI 恒 disabled 至 Task 12。
 import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
@@ -38,6 +40,7 @@ import { deleteFolder, downloadFile, trashFile, type FileItem } from '@/api/stor
 import { isUsableTrail, navTrailKey, setTrail } from '@/features/files/crumbs'
 import { applyInvalidations, computeInvalidations, mutationErrorMessage } from './actions'
 import { MoveDialog } from './MoveDialog'
+import { PreviewSheet } from './PreviewSheet'
 import { RenameDialog } from './RenameDialog'
 import { RowContextMenu } from './RowContextMenu'
 import { RowToolbar } from './RowToolbar'
@@ -82,6 +85,11 @@ export function FilesPage() {
   const [renameTarget, setRenameTarget] = useState<FileRow | null>(null)
   const [moveTarget, setMoveTarget] = useState<FileRow | null>(null)
   const [deleteTargets, setDeleteTargets] = useState<FileRow[] | null>(null)
+  // Task 10 预览接线：双击行 / 右键「预览」/ 单击·Enter 文件名按钮（⑭）三路同源汇入 sheet。
+  const [previewRow, setPreviewRow] = useState<FileRow | null>(null)
+  const openPreview = (row: FileRow) => {
+    if (row.kind === 'file') setPreviewRow(row) // 文件夹行防御性忽略（入口均限 file，双保险）
+  }
 
   // 越页兜底（Important #1）：后端越页返回 200+空 items + 真实 total——空 rows≠空目录。
   // 落定后 replace 到最后一有效页（total=0 不钳位：那是真空态，Empty 负责）。
@@ -217,6 +225,7 @@ export function FilesPage() {
             rows={state.rows}
             loading={state.isLoading}
             onFolderOpen={(row) => handleFolderOpen(row.id, row.name, row.kind)}
+            onPreview={openPreview}
             onSelectionChange={setSelection}
             onContext={(row, pos) => setContextMenu({ row, pos })}
           />
@@ -255,13 +264,16 @@ export function FilesPage() {
         row={contextMenu?.row ?? null}
         pos={contextMenu?.pos ?? null}
         onClose={() => setContextMenu(null)}
-        onPreview={() => undefined} // TODO(Task 10 预览接线)
+        onPreview={openPreview} // Task 10 预览接线（右键「预览」与双击/键盘同源汇入 PreviewSheet）
         onDownload={(row) => void runDownload([row])}
         onRename={setRenameTarget}
         onMove={setMoveTarget}
         onTrash={(row) => setDeleteTargets([row])}
         onAsk={() => undefined} // 菜单项 disabled 至 Task 12
       />
+      {/* Task 10 预览 sheet：常驻挂载，row 引用变化驱动取数/blob 释放（PreviewSheet 头注）；
+          onAsk=Task 12 占位（按钮恒 disabled，回调不会触发）。 */}
+      <PreviewSheet row={previewRow} onClose={() => setPreviewRow(null)} onAsk={() => undefined} />
       <RenameDialog target={renameTarget} onClose={() => setRenameTarget(null)} />
       <MoveDialog target={moveTarget} onClose={() => setMoveTarget(null)} />
       <AlertDialog

@@ -1,6 +1,8 @@
 // 文件列表表格（Task 7 / spec §5.2）：vendored table 原语 + 外部 Pagination（服务端分页，
 // 后端无排序参数，不用 data-table 自取数）。交互全部走「回调缝」：
-//   onPreview/onContext/onSelectionChange 为 Task 9/10 接线点（本任务默认 no-op，行为不回归）；
+//   onContext/onSelectionChange 由 Task 9 接实；onPreview 由 Task 10 接实（FilesPage 预览 sheet）。
+//   Task 10 评审强制项⑭（键盘入口）：文件名与文件夹名同构为行内按钮——文件夹=单击进入（Task 7），
+//   文件=单击/聚焦后 Enter/Space 预览；行双击缝保留不回归。按钮原生 keyboard 语义，无需自造 keydown。
 //   onFolderOpen 由 FilesPage 拥有（URL ?folder= 更新 + navTrail 追加，见 crumbs 契约）。
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { FileText, Folder } from 'lucide-react'
@@ -21,7 +23,7 @@ const noop = () => undefined
 export interface FilesTableProps {
   rows: FileRow[]
   loading?: boolean
-  /** 双击文件行（Task 10 预览接线）。 */
+  /** 双击文件行，或单击/Enter 聚焦的文件名按钮（Task 10 预览接线）。 */
   onPreview?: (row: FileRow) => void
   /** 右键行（Task 9 上下文菜单接线；pos 为视口坐标）。 */
   onContext?: (row: FileRow, pos: { x: number; y: number }) => void
@@ -160,10 +162,15 @@ export function FilesTable({
                   <span className="truncate">{row.name}</span>
                 </button>
               ) : (
-                <span className="inline-flex max-w-full items-center gap-2">
+                // ⑭ 键盘入口：与文件夹名按钮同构（Enter/Space 原生触发=预览；focus-visible 环可见）
+                <button
+                  type="button"
+                  onClick={() => onPreview(row)}
+                  className="inline-flex max-w-full items-center gap-2 text-left text-[var(--color-foreground)] underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+                >
                   <FileText size={16} className="shrink-0 opacity-60" />
                   <span className="truncate">{row.name}</span>
-                </span>
+                </button>
               )}
             </TableCell>
             <TableCell align="right" className="tabular-nums opacity-80">
