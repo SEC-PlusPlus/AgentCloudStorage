@@ -22,3 +22,21 @@ body,
   background-image: radial-gradient(var(--glass-border) 1px, transparent 1.5px);
   background-size: 24px 24px;
 }
+
+/* R-T5-a1：vendored AuroraBackground 引用 animate-aurora-shift，但 @glinui/tokens 未带对应
+   animation token / keyframes（实测 grep 0 命中）→ Tailwind v4 不生成该类，光斑会静止。
+   此处按 v4 惯用法补定义；时长取组件逐 blob 注入的 --aurora-duration，位移用独立
+   translate 属性（不与组件内联 transform: translate(-50%,-50%) 冲突）。
+   TODO(Task 13 swap)：registry 源码恢复后若自带动效定义，删除本块。 */
+@theme {
+  --animate-aurora-shift: aurora-shift var(--aurora-duration, 8s) ease-in-out infinite alternate;
+
+  @keyframes aurora-shift {
+    from {
+      translate: 0 0;
+    }
+    to {
+      translate: 18% -12%;
+    }
+  }
+}

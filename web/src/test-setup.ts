@@ -17,3 +17,18 @@ if (!window.matchMedia) {
     }),
   })
 }
+
+// jsdom 29 未实现 IntersectionObserver，vendored BlurFade（登录页 mascot 入场）挂载效应依赖它。
+// 最小空实现：回调永不触发（元素保持 opacity:0），不断言动效，仅保证渲染不抛错。
+class IntersectionObserverStub {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+  takeRecords(): [] {
+    return []
+  }
+}
+if (!('IntersectionObserver' in window)) {
+  ;(window as unknown as { IntersectionObserver: unknown }).IntersectionObserver =
+    IntersectionObserverStub
+}
