@@ -3,8 +3,12 @@
 create_app() falls back to env-driven Settings() in production; tests inject a
 constructed Settings and may override app.state.llm_client with an
 AsyncOpenAI(http_client=httpx.AsyncClient(transport=httpx.MockTransport(...)))
-to fake the upstream LLM. No module-level app instance here yet — Task 7 adds
-`app = create_app()` once Docker/docs land.
+to fake the upstream LLM.
+
+Deliberately NO module-level `app = create_app()` instance: Settings() reads
+required env vars, so a module-level app would crash `import app.main` (and the
+test suite) in any env-free context. Production and dev both run uvicorn in
+factory mode instead: `uvicorn --factory app.main:create_app`.
 """
 from fastapi import FastAPI
 from openai import AsyncOpenAI

@@ -1,0 +1,14 @@
+# Build context is the repo root (docker build -f agent/Dockerfile .).
+# Only agent/requirements.txt and agent/app are COPYed; keep everything else
+# (especially the 80M dev venv) out of the tarball uploaded to the daemon.
+**/.venv/
+**/__pycache__/
+*.pyc
+.git/
+.claude/
+.superpowers/
+docs/
+web/
+data/
+*.db
+*.log
