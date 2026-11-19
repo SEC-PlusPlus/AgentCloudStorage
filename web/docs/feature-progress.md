@@ -18,6 +18,7 @@
 - [x] M5 大文件分片上传、续传、进度与取消：前端已接入现有后端 API；静态构建与完整依赖下的真实端到端验收待完成。
 - [x] M6 图片、PDF、文本文件在线预览：前端实现与生产构建完成；真实 API/MinIO 文件预览待服务启动后手动验收；未改后端。
 - [x] M7 单文件资料问答：开发文档、前端入口、问答面板、API 接入及生产构建完成；P1 远端模式真实链路冒烟通过（2026-11-19：Go 服务 + Python agent + 智谱真实密钥，注册→上传→问答 200 且响应逐字段同旧版、agent 宕机 503、清空 base_url 本地兜底 200，全记录见 `.superpowers/sdd/2026-11-18-agent-python-service/task-8-report.md`）；浏览器手动回归待完成。
+- [x] P1.5+P2 真实链路冒烟通过（2026-11-19：composite 双档全链路，`stream:true` 收到 text/event-stream 增量 32~60 个 delta 帧并以 `[DONE]` 收尾、含 `[1]` 引用；kill agent 后流式请求以单 delta 整段本地答案 + `[DONE]` 回落且 Go 记 WARN agent fallback、非流式同场 200 回归；客户端中途断连 6 次 agent 零异常、仅 `context canceled` 告警；双档重启后回归与 `go test`/`go vet`/pytest 19 全绿，全记录见 `.superpowers/sdd/2026-11-18-agent-python-service/task-12-report.md`）；M7 遗留的浏览器手动回归仍待完成（并入 M9 真实 API 回归轮）。
 - [x] M8 登录后浅色工作台：文档、侧栏/文件列表/弹窗视觉重构及生产构建完成；浏览器视觉与操作待手动验收。
 - [x] M9A 登录页 SVG/JS 动效、新品牌符号与 Element Plus 表单：开发文档、实现、构建和本地视觉检查完成。
 - [x] M9B Element Plus 应用外壳：开发文档、实现、构建和模拟登录态视觉检查完成。
