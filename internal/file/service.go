@@ -64,7 +64,8 @@ type MoveInput struct {
 }
 
 type StorageUsageResult struct {
-	UsedBytes int64
+	UsedBytes  int64
+	QuotaBytes int64
 }
 
 type FolderAuthorizer interface {
@@ -403,8 +404,14 @@ func (s *Service) StorageUsage(ctx context.Context, ownerID uint64) (*StorageUsa
 		return nil, fmt.Errorf("get storage usage: %w", err)
 	}
 
+	quotaBytes, err := s.repo.QuotaBytes(ctx, ownerID)
+	if err != nil {
+		return nil, fmt.Errorf("get storage usage: %w", err)
+	}
+
 	return &StorageUsageResult{
-		UsedBytes: usedBytes,
+		UsedBytes:  usedBytes,
+		QuotaBytes: quotaBytes,
 	}, nil
 }
 

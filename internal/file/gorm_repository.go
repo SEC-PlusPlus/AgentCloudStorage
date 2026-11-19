@@ -255,6 +255,20 @@ func (r *GORMRepository) UsedBytes(ctx context.Context, ownerID uint64) (int64, 
 	return usedBytes, nil
 }
 
+func (r *GORMRepository) QuotaBytes(ctx context.Context, ownerID uint64) (int64, error) {
+	var quotaBytes int64
+
+	err := r.db.WithContext(ctx).
+		Table("users").
+		Where("id = ?", ownerID).
+		Select("quota_bytes").Row().Scan(&quotaBytes)
+	if err != nil {
+		return 0, fmt.Errorf("get user quota: %w", err)
+	}
+
+	return quotaBytes, nil
+}
+
 func (r *GORMRepository) ReserveQuota(ctx context.Context, ownerID uint64, size int64) error {
 	if size < 0 {
 		return errors.New("file size must not be negative")

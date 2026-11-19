@@ -25,7 +25,8 @@ type renameFileRequest struct {
 }
 
 type storageUsageResponse struct {
-	UsedBytes int64 `json:"used_bytes"`
+	UsedBytes  int64 `json:"used_bytes"`
+	QuotaBytes int64 `json:"quota_bytes"`
 }
 
 type fileListItemResponse struct {
@@ -626,6 +627,7 @@ func (h *FileHandler) StorageUsage(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, storageUsageResponse{
-		UsedBytes: result.UsedBytes,
+		UsedBytes:  result.UsedBytes,
+		QuotaBytes: result.QuotaBytes,
 	})
 }

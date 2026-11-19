@@ -16,6 +16,7 @@ type Repository interface {
 	HasFilesInFolder(ctx context.Context, ownerID uint64, folderID uint64) (bool, error)
 	SearchByName(ctx context.Context, ownerID uint64, keyword string, limit int, offset int) ([]File, int64, error)
 	UsedBytes(ctx context.Context, ownerID uint64) (int64, error)
+	QuotaBytes(ctx context.Context, ownerID uint64) (int64, error)
 	ReserveQuota(ctx context.Context, ownerID uint64, size int64) error
 	ReleaseQuota(ctx context.Context, ownerID uint64, size int64) error
 	CreateWithQuota(ctx context.Context, file *File, reservedSize int64) error
