@@ -1,0 +1,114 @@
+// 文件工作台页（Task 7 / spec §5.2）：URL 即状态（?folder=/?q=/?page= 全 searchParams 驱动，
+// 前进/后退天然正确，不建第二套本地状态）。
+// 导航进目录 = URL 更新 + navTrail 追加（crumbs.ts 契约）：当前链可用时 setTrail 写回
+// 「现链 + 点击目录」；降级链（尾项 name 空或缓存缺失）不回写半截链——isUsableTrail 只认全名链，
+// 让 TopBar 的 resolveAncestorPath BFS 自愈重试（深链场景点击子目录属罕见路径，不伪造前缀）。
+import { useQueryClient } from '@tanstack/react-query'
+import { useLocation, useNavigate, useSearchParams } from 'react-router'
+import { Alert, AlertDescription, AlertTitle } from '@/components/glinui/components/alert'
+import { Badge } from '@/components/glinui/components/badge'
+import { Empty } from '@/components/app/Empty'
+import { Pagination } from '@/components/app/Pagination'
+import { folderIdFromLocation } from '@/components/app/TopBar'
+import { ApiError } from '@/api/client'
+import { navTrailKey, setTrail, type Crumb } from '@/features/files/crumbs'
+import { FilesTable } from './FilesTable'
+import { useFileRows } from './useFileRows'
+
+function parsePage(raw: string | null): number {
+  const parsed = Number(raw ?? 1)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 1
+}
+
+export function FilesPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const { pathname, search } = useLocation()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+
+  const folderId = folderIdFromLocation(pathname, search)
+  const keyword = searchParams.get('q')
+  const page = parsePage(searchParams.get('page'))
+
+  const state = useFileRows(folderId, page, keyword)
+
+  const handleFolderOpen = (rowId: number, rowName: string, rowKind: string) => {
+    if (rowKind !== 'folder') return
+    const cached = queryClient.getQueryData<Crumb[]>(navTrailKey(folderId))
+    const last = cached?.[cached.length - 1]
+    const usable = Boolean(cached && cached.length > 0 && last && last.id === folderId && cached.every((crumb) => crumb.name !== ''))
+    if (cached && usable) {
+      setTrail(queryClient, rowId, [...cached, { id: rowId, name: rowName }])
+    }
+    // 进目录回到浏览态：清 q / 清 page（新目录从第 1 页看起）
+    const next = new URLSearchParams({ folder: String(rowId) })
+    navigate({ pathname: '/files', search: `?${next}` })
+  }
+
+  const handlePageChange = (next: number) => {
+    const params = new URLSearchParams(searchParams)
+    if (next <= 1) params.delete('page')
+    else params.set('page', String(next))
+    setSearchParams(params)
+  }
+
+  return (
+    <div className="mx-auto flex max-w-5xl flex-col gap-4" data-testid="files-page">
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-lg font-medium text-[var(--color-foreground)]">
+          {state.keywordMode ? <>搜索「{keyword?.trim()}」</> : '文件'}
+        </h1>
+        {state.keywordMode && !state.isLoading && !state.isError ? (
+          <span data-testid="search-count">
+            <Badge variant="glass">{state.total} 个结果</Badge>
+          </span>
+        ) : null}
+      </div>
+
+      {state.isError ? (
+        <Alert variant="destructive" data-testid="files-error">
+          <AlertTitle>读取文件列表失败</AlertTitle>
+          <AlertDescription>
+            {state.error instanceof ApiError ? state.error.message : '服务暂时遇到问题，请稍后重试。'}
+          </AlertDescription>
+        </Alert>
+      ) : state.isEmpty ? (
+        <Empty
+          title={
+            state.keywordMode
+              ? `没有找到「${keyword?.trim()}」相关文件`
+              : folderId === 0
+                ? '云仓还是空的'
+                : '这个目录还没有内容'
+          }
+          description={
+            state.keywordMode
+              ? '换个关键词试试，或从顶部搜索框重新搜索。'
+              : '可以从底部 Dock 上传第一个文件。'
+          }
+          action={
+            state.keywordMode
+              ? { label: '清除搜索', onClick: () => navigate({ pathname: '/files', search: '' }) }
+              : undefined
+          }
+        />
+      ) : (
+        <>
+          <FilesTable
+            rows={state.rows}
+            loading={state.isLoading}
+            onFolderOpen={(row) => handleFolderOpen(row.id, row.name, row.kind)}
+          />
+          {!state.isLoading && state.total > 0 ? (
+            <Pagination
+              page={page}
+              pageSize={state.pageSize}
+              total={state.total}
+              onChange={handlePageChange}
+            />
+          ) : null}
+        </>
+      )}
+    </div>
+  )
+}

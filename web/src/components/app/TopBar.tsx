@@ -2,11 +2,18 @@
 // 面包屑数据 = resolveAncestorPath（crumbs.ts，缓存键 ['navTrail', folderId]）经 useQuery 包装：
 // Task 7 导航成功 setTrail 写同一键 → 此处零请求更新。folderId 读 URL `?folder=`（缺省 0，files 路由同约定）。
 // 用量 = ['usage'] getStorageUsage（quota_bytes 后端见 1c2b801），窗口聚焦自动重取（brief Step 4）。
+// Task 7 追加全局搜索入口（裁定：TopBar 输入框 → URL `?q=` 驱动 FilesPage 搜索模式；
+// vendored command/cmdk 命令面板留给 Task 13——保持搜索状态在 URL 中可前进后退，最贴 spec §5.2 的
+// 「TopBar 搜索框 keyword → search 查询，「N 个结果」计数」原文）。
+import { useEffect, useState, type FormEvent } from 'react'
+import { Search } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate } from 'react-router'
 import { getStorageUsage } from '@/api/storage'
+import { Button } from '@/components/glinui/components/button'
 import { GlassBreadcrumb, type GlassBreadcrumbItem } from '@/components/glinui/components/glass-breadcrumb'
 import { GlassNavbar } from '@/components/glinui/components/glass-navbar'
+import { Input } from '@/components/glinui/components/input'
 import { Progress } from '@/components/glinui/components/progress'
 import { ROOT_FOLDER_ID, navTrailKey, resolveAncestorPath, rootCrumb, type Crumb } from '@/features/files/crumbs'
 import { APP_NAME, BRAND_LOGO_SRC } from '@/lib/brand'
@@ -24,6 +31,24 @@ export function TopBar() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const folderId = folderIdFromLocation(pathname, search)
+
+  // 搜索草稿本地态；提交才写 URL（服务端查询不宜每键发请求）。URL ?q= 反向同步保证前进/后退一致。
+  const qParam = new URLSearchParams(search).get('q') ?? ''
+  const [keywordDraft, setKeywordDraft] = useState(qParam)
+  useEffect(() => {
+    setKeywordDraft(qParam)
+  }, [qParam])
+
+  const submitSearch = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const kw = keywordDraft.trim()
+    if (kw === '') {
+      if (qParam !== '') navigate({ pathname: '/files', search: '' }) // 空提交=退出搜索态；否则不动
+      return
+    }
+    // 搜索为全局动作：离开目录上下文（folder 不随 q 携带），page 由 FilesPage 复位逻辑管。
+    navigate({ pathname: '/files', search: `?q=${encodeURIComponent(kw)}` })
+  }
 
   const trailQuery = useQuery({
     queryKey: navTrailKey(folderId),
@@ -85,6 +110,23 @@ export function TopBar() {
       <div className="min-w-0 flex-1 overflow-x-auto" data-testid="breadcrumb">
         <GlassBreadcrumb items={breadcrumbItems} maxItems={6} separator="›" />
       </div>
+
+      {/* 全局搜索（Task 7）：提交写 URL `?q=`，FilesPage 读参进搜索模式（服务端 ['search',q,p]）。 */}
+      <form role="search" onSubmit={submitSearch} className="flex shrink-0 items-center gap-1.5">
+        <Input
+          type="search"
+          aria-label="搜索文件"
+          placeholder="搜索文件…"
+          variant="glass"
+          size="sm"
+          className="w-40"
+          value={keywordDraft}
+          onChange={(event) => setKeywordDraft(event.target.value)}
+        />
+        <Button type="submit" variant="glass" size="sm" aria-label="提交搜索">
+          <Search size={14} />
+        </Button>
+      </form>
 
       <span
         className="flex shrink-0 items-center gap-2 text-xs text-[var(--color-foreground)] opacity-80"

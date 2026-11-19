@@ -182,3 +182,26 @@ describe('Dock：导航 / noop 动作 / 用户菜单', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('/login')
   })
 })
+
+// Task 7 搜索入口（裁定：TopBar 输入框 → URL ?q=，命令面板留 Task 13）：提交写 q、目录上下文清空、
+// URL→输入框反向同步（前进/后退一致）、空提交退出搜索态。
+describe('TopBar：搜索入口（?q= 驱动）', () => {
+  it('输入关键词回车 → /files?q=…（中文编码、folder 不携带）', async () => {
+    renderWithProviders(<TopBar />, { entry: '/files?folder=3' })
+    const box = await screen.findByRole('searchbox', { name: '搜索文件' })
+    await userEvent.type(box, '报告 1')
+    await userEvent.keyboard('{Enter}')
+    await waitFor(() =>
+      expect(screen.getByTestId('location')).toHaveTextContent(`/files?q=${encodeURIComponent('报告 1')}`),
+    )
+  })
+
+  it('深链 ?q= 回填输入框；清空后回车退出搜索态', async () => {
+    renderWithProviders(<TopBar />, { entry: `/files?q=${encodeURIComponent('旧词')}` })
+    const box = await screen.findByRole('searchbox', { name: '搜索文件' })
+    expect(box).toHaveValue('旧词')
+    await userEvent.clear(box)
+    await userEvent.keyboard('{Enter}')
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/files'))
+  })
+})
