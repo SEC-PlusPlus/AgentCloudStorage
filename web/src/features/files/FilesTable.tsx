@@ -2,7 +2,7 @@
 // 后端无排序参数，不用 data-table 自取数）。交互全部走「回调缝」：
 //   onPreview/onContext/onSelectionChange 为 Task 9/10 接线点（本任务默认 no-op，行为不回归）；
 //   onFolderOpen 由 FilesPage 拥有（URL ?folder= 更新 + navTrail 追加，见 crumbs 契约）。
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { FileText, Folder } from 'lucide-react'
 import {
   Table,
@@ -45,11 +45,22 @@ export function FilesTable({
   onFolderOpen = noop,
 }: FilesTableProps) {
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
+  const selectedRef = useRef(selected)
+  selectedRef.current = selected // 渲染期镜像：effects 读最新勾选而不必把 selected 拉进依赖（避免自触发）
 
   // 翻页/切目录/换搜索词都会带来新 rows 引用：清勾选，防止陈旧选择跨页泄漏给 Task 9/10 批量操作。
+  // 修复轮 1 / Important #3：若清空前存在勾选，必须经 onSelectionChange([]) 上抛——
+  // 只清内部 Set 会让上游接线方（浮动操作条等）继续持有陈旧集合。rows 引用未变时不重跑、不空报。
+  const prevRowsRef = useRef(rows)
   useEffect(() => {
-    setSelected(new Set())
-  }, [rows])
+    if (prevRowsRef.current === rows) return
+    prevRowsRef.current = rows
+    const hadSelection = selectedRef.current.size > 0
+    if (hadSelection) {
+      setSelected(new Set())
+      onSelectionChange([])
+    }
+  }, [rows, onSelectionChange])
 
   const selectedRows = useMemo(() => rows.filter((row) => selected.has(rowKey(row))), [rows, selected])
   const allChecked = rows.length > 0 && selectedRows.length === rows.length

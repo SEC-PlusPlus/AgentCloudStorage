@@ -1,8 +1,12 @@
 // 文件工作台页（Task 7 / spec §5.2）：URL 即状态（?folder=/?q=/?page= 全 searchParams 驱动，
 // 前进/后退天然正确，不建第二套本地状态）。
 // 导航进目录 = URL 更新 + navTrail 追加（crumbs.ts 契约）：当前链可用时 setTrail 写回
-// 「现链 + 点击目录」；降级链（尾项 name 空或缓存缺失）不回写半截链——isUsableTrail 只认全名链，
+// 「现链 + 点击目录」；可用性判定直接调用 crumbs.isUsableTrail（修复轮 1 / Important #2：
+// 写闸与 fast-path 同源，杜绝内联复制丢守卫的漂移类）；不可用链不回写半截，
 // 让 TopBar 的 resolveAncestorPath BFS 自愈重试（深链场景点击子目录属罕见路径，不伪造前缀）。
+// 越页兜底（修复轮 1 / Important #1）：后端对 page>ceil(total/pageSize) 返回 200+空 items
+// （file_handler.go:185-238），这不是空目录——落定后 replace 回最后有效页，历史不留死页。
+import { useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { Alert, AlertDescription, AlertTitle } from '@/components/glinui/components/alert'
@@ -11,7 +15,7 @@ import { Empty } from '@/components/app/Empty'
 import { Pagination } from '@/components/app/Pagination'
 import { folderIdFromLocation } from '@/components/app/TopBar'
 import { ApiError } from '@/api/client'
-import { navTrailKey, setTrail, type Crumb } from '@/features/files/crumbs'
+import { isUsableTrail, navTrailKey, setTrail } from '@/features/files/crumbs'
 import { FilesTable } from './FilesTable'
 import { useFileRows } from './useFileRows'
 
@@ -32,12 +36,25 @@ export function FilesPage() {
 
   const state = useFileRows(folderId, page, keyword)
 
+  // 越页兜底（Important #1）：后端越页返回 200+空 items + 真实 total——空 rows≠空目录。
+  // 落定后 replace 到最后一有效页（total=0 不钳位：那是真空态，Empty 负责）。
+  const lastValidPage = Math.max(1, Math.ceil(state.total / state.pageSize))
+  const outOfRange = !state.isLoading && !state.isError && state.total > 0 && page > lastValidPage
+
+  useEffect(() => {
+    if (!outOfRange) return
+    const params = new URLSearchParams(searchParams)
+    if (lastValidPage <= 1) params.delete('page')
+    else params.set('page', String(lastValidPage))
+    setSearchParams(params, { replace: true })
+  }, [outOfRange, lastValidPage, searchParams, setSearchParams])
+
   const handleFolderOpen = (rowId: number, rowName: string, rowKind: string) => {
     if (rowKind !== 'folder') return
-    const cached = queryClient.getQueryData<Crumb[]>(navTrailKey(folderId))
-    const last = cached?.[cached.length - 1]
-    const usable = Boolean(cached && cached.length > 0 && last && last.id === folderId && cached.every((crumb) => crumb.name !== ''))
-    if (cached && usable) {
+    // 写闸与 crumbs fast-path 同源（Important #2）：isUsableTrail 谓词含尾 id 匹配、
+    // typeof name 字符串守卫、非空名三重检查；不可用链不回写半截，BFS 自愈留权重挂载。
+    const cached = queryClient.getQueryData(navTrailKey(folderId))
+    if (isUsableTrail(cached, folderId)) {
       setTrail(queryClient, rowId, [...cached, { id: rowId, name: rowName }])
     }
     // 进目录回到浏览态：清 q / 清 page（新目录从第 1 页看起）
@@ -72,7 +89,7 @@ export function FilesPage() {
             {state.error instanceof ApiError ? state.error.message : '服务暂时遇到问题，请稍后重试。'}
           </AlertDescription>
         </Alert>
-      ) : state.isEmpty ? (
+      ) : state.isEmpty && !outOfRange ? (
         <Empty
           title={
             state.keywordMode

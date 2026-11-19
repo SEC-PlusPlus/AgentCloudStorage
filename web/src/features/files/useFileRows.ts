@@ -75,19 +75,21 @@ export function useFileRows(folderId: number, page: number, keyword: string | nu
   const listResult = listQuery.data
   const foldersData = foldersQuery.data
 
-  // 依赖只放稳定引用（query data 对象）；勿用 ?? [] 内联兜底——那会让 rows 每次 render 新引用，
-  // FilesTable 的「rows 变化清勾选」effect 会被误触发，勾选态在重渲染时闪丢。
+  // 依赖只放稳定引用（query data 对象）；勿用 ?? [] 内联兜底——那会让 rows/items 每次 render
+  // 新引用：FilesTable 的「rows 变化清勾选」effect 被误触发，勾选态在重渲染时闪丢。
+  // items 同纪律（修复轮 1 / Minor ②）：兜底空数组经 useMemo 固化，pending 期跨 render 同引用。
   const rows = useMemo(
     () => mergeRows(keywordMode ? [] : (foldersData?.items ?? []), listResult?.items ?? [], listResult?.pagination.total ?? 0),
     [keywordMode, foldersData, listResult],
   )
+  const items = useMemo(() => listResult?.items ?? [], [listResult])
 
   const isLoading = listQuery.isPending || (!keywordMode && foldersQuery.isPending)
   const isError = listQuery.isError || (!keywordMode && foldersQuery.isError)
 
   return {
     rows,
-    items: listResult?.items ?? [],
+    items,
     total: listResult?.pagination.total ?? 0,
     pageSize: listResult?.pagination.page_size ?? PAGE_SIZE,
     keywordMode,

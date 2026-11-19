@@ -152,6 +152,22 @@ describe('useFileRows：三 query 合并', () => {
     expect(result.current.rows).toBe(before)
   })
 
+  // 修复轮 1 / Minor ②（与 rows 同属引用稳定纪律）：items ?? [] 兜底同样不得每次 render 新引用。
+  it('items 引用稳定：pending 兜底空数组与落定后均跨 render 同引用', async () => {
+    let resolveFiles!: (v: PageResult<FileItem>) => void
+    mockedListFolders.mockResolvedValue({ items: [] })
+    mockedListFiles.mockReturnValue(new Promise((r) => { resolveFiles = r }))
+    const { result, rerender } = renderHook(() => useFileRows(3, 1, null), { wrapper: wrapperFactory() })
+    const pendingRef = result.current.items
+    rerender()
+    expect(result.current.items).toBe(pendingRef)
+    resolveFiles(pageResult([file(10, 'a.txt', 1)], 1))
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    const settledRef = result.current.items
+    rerender()
+    expect(result.current.items).toBe(settledRef)
+  })
+
   it('错误态：list 查询失败 → isError + error 透传（调用方负责 Alert 展示）', async () => {
     mockedListFolders.mockResolvedValue({ items: [] })
     mockedListFiles.mockRejectedValue(new Error('boom'))

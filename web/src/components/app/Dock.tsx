@@ -25,8 +25,9 @@ export interface DockActions {
 
 const noop = () => undefined
 
-// TODO(Task 8/9)：真实实现注入点——onUpload=上传对话框（input/分片流程）、onNewFolder=新建目录
-// modal（Task 9）、onSearch=命令面板（vendored command/cmdk 已可用；面板 UI 随 Task 7 搜索接线落地）。
+// TODO(Task 8/9/13)：真实实现注入点——onUpload=上传对话框（input/分片流程，Task 8）、onNewFolder=新建目录
+// modal（Task 9）、onSearch=命令面板（vendored command/cmdk 已可用；**Task 13** registry swap 后接线——
+// 修复轮 1 更正旧指针「随 Task 7 落地」：Task 7 裁定搜索入口为 TopBar 输入框 ?q=，面板 UI 顺延 Task 13）。
 export const noopDockActions: DockActions = { onUpload: noop, onSearch: noop, onNewFolder: noop }
 
 export function Dock({ actions = noopDockActions }: { actions?: DockActions }) {

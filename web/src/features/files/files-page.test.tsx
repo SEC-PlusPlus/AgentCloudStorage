@@ -12,7 +12,7 @@ import { Empty } from '@/components/app/Empty'
 import { Pagination, pageItems } from '@/components/app/Pagination'
 import { FilesPage } from './FilesPage'
 import { FilesTable } from './FilesTable'
-import { navTrailKey, setTrail } from './crumbs'
+import { isUsableTrail, navTrailKey, setTrail } from './crumbs'
 import type { FileRow } from './useFileRows'
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -105,6 +105,33 @@ describe('FilesTable：行渲染与回调缝（Task 9/10 接线锚）', () => {
     await userEvent.click(screen.getByRole('button', { name: '照片' }))
     expect(onFolderOpen).toHaveBeenCalledTimes(1)
     expect(onFolderOpen.mock.calls[0]?.[0]).toMatchObject({ kind: 'folder', id: 7 })
+  })
+
+  // 修复轮 1 / Important #3：rows 换引用（翻页/切目录/换搜索词）时若先前有勾选，内部清集
+  // 必须经 onSelectionChange([]) 上抛——否则 T9/T10 拿陈旧集合做批量操作。
+  it('rows 换引用 + 先前有勾选 → 清集并上抛空集合；勾选框态同步复位', async () => {
+    const onSelectionChange = vi.fn()
+    const rowsA: FileRow[] = [
+      { kind: 'file', id: 10, name: 'a.txt', sizeText: '1.0 KB', dateText: '2026-03-03', contentType: 'text/plain' },
+    ]
+    const rowsB: FileRow[] = [
+      { kind: 'file', id: 20, name: 'b.txt', sizeText: '2.0 KB', dateText: '2026-03-04', contentType: 'text/plain' },
+    ]
+    const { rerender } = render(<FilesTable rows={rowsA} onSelectionChange={onSelectionChange} />)
+    await userEvent.click(screen.getByRole('checkbox', { name: '选择 a.txt' }))
+    expect(onSelectionChange).toHaveBeenLastCalledWith([rowsA[0]])
+
+    rerender(<FilesTable rows={rowsB} onSelectionChange={onSelectionChange} />)
+    expect(onSelectionChange).toHaveBeenLastCalledWith([])
+    expect(screen.getByRole('checkbox', { name: '选择 b.txt' })).not.toBeChecked()
+
+    // 无勾选时换引用：不空报（避免噪声回调）
+    onSelectionChange.mockClear()
+    const rowsC: FileRow[] = [
+      { kind: 'file', id: 30, name: 'c.txt', sizeText: '3.0 KB', dateText: '2026-03-05', contentType: 'text/plain' },
+    ]
+    rerender(<FilesTable rows={rowsC} onSelectionChange={onSelectionChange} />)
+    expect(onSelectionChange).not.toHaveBeenCalled()
   })
 
   it('右键行 → onContext(row, {x,y}) 并 preventDefault；勾选 → onSelectionChange 增删同步', async () => {
@@ -254,6 +281,68 @@ describe('FilesPage：URL 驱动全景', () => {
     await waitFor(() =>
       expect(fetchMock.mock.calls.some(([u]) => String(u).includes('folder_id=3&page=2'))).toBe(true),
     )
+  })
+
+  // 修复轮 1 / Important #1：后端对 page>ceil(total/size) 返回 200+空 items——越页不是空目录，
+  // 必须回退到最后一有效页（replace，历史不留死页），否则 Empty 假空态 + 分页条不渲染无恢复路径。
+  it('越页深链 page=999：回退最后有效页 page=2 并取数，不显假空态', async () => {
+    // 忠实模拟后端：越页 → 200 + 空 items（total 仍 21）；page=2 → 真实第二页数据
+    impl = (input) => {
+      const url = String(input)
+      if (url.startsWith('/api/v1/files?folder_id=3&page=2')) {
+        return Promise.resolve(jsonResponse(200, { items: [FILE_A], pagination: { page: 2, page_size: 20, total: 21 } }))
+      }
+      if (url.startsWith('/api/v1/files')) {
+        return Promise.resolve(jsonResponse(200, { items: [], pagination: { page: 999, page_size: 20, total: 21 } }))
+      }
+      if (url.startsWith('/api/v1/folders')) return Promise.resolve(jsonResponse(200, foldersBody))
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    }
+    renderPage('/files?folder=3&page=999')
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/files?folder=3&page=2'))
+    expect(screen.queryByTestId('empty')).toBeNull()
+    expect(await screen.findByText('a.txt')).toBeInTheDocument()
+    expect(await screen.findByTestId('pagination')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes('folder_id=3&page=2'))).toBe(true)
+  })
+
+  it('真·空目录（total=0）page=999 保持空态文案、不回退钳位（边界护栏）', async () => {
+    filesBody = { items: [], pagination: { page: 999, page_size: 20, total: 0 } }
+    foldersBody = { items: [] }
+    renderPage('/files?folder=3&page=999')
+    expect(await screen.findByTestId('empty')).toBeInTheDocument()
+    expect(screen.getByTestId('location')).toHaveTextContent('/files?folder=3&page=999')
+  })
+
+  it('搜索模式越页：q=报告&page=5（total=7→1 页）→ page 参数删除回第 1 页', async () => {
+    searchBody = { items: [FILE_B], pagination: { page: 5, page_size: 20, total: 7 } }
+    renderPage('/files?q=报告&page=5')
+    // setSearchParams 会把 query 百分号编码回写（中文关键词），断言用编码形态而非原文
+    await waitFor(() =>
+      expect(screen.getByTestId('location')).toHaveTextContent(`/files?q=${encodeURIComponent('报告')}`),
+    )
+    expect(screen.getByTestId('location')).not.toHaveTextContent('page=')
+    expect(await screen.findByText('报告.pdf')).toBeInTheDocument()
+  })
+
+  // 修复轮 1 / Important #2：写闸与 crumbs.isUsableTrail 同源（内联复制曾丢 typeof name 守卫——
+  // 6b 修复轮要防的漂移类）。非字符串 name 的缓存链不得 setTrail 追加。
+  it('缓存链含非字符串 name（损坏态）：不回写 navTrail——与 isUsableTrail 同源的显证', async () => {
+    renderPage()
+    await screen.findByText('照片')
+    queryClient.setQueryData(navTrailKey(3), [{ id: 3, name: 5 as unknown as string }])
+    await userEvent.click(screen.getByRole('button', { name: '照片' }))
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/files?folder=7'))
+    expect(queryClient.getQueryData(navTrailKey(7))).toBeUndefined()
+  })
+
+  it('isUsableTrail 谓词本身：尾 id 匹配 + 全链非空字符串名才可用（五分支直测，锁同源契约）', () => {
+    expect(isUsableTrail([{ id: 0, name: '根目录' }, { id: 3, name: '文档' }], 3)).toBe(true)
+    expect(isUsableTrail([{ id: 3, name: '' }], 3)).toBe(false)
+    expect(isUsableTrail([{ id: 3, name: 5 as unknown as string }], 3)).toBe(false)
+    expect(isUsableTrail([{ id: 0, name: '根目录' }], 3)).toBe(false) // 尾 id 不符
+    expect(isUsableTrail(undefined, 3)).toBe(false)
+    expect(isUsableTrail([], 3)).toBe(false)
   })
 })
 

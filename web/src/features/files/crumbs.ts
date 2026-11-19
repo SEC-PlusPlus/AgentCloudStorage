@@ -44,7 +44,11 @@ export function setTrail(queryClient: QueryClient, folderId: number, crumbs: Cru
  * 无误伤风险：后端禁止空目录名，合法链（BFS 成功或 Task 7 补名后 setTrail）各项 name 恒非空；
  * 降级单元素按合同只是返回值，不是可命中的缓存态。
  */
-function isUsableTrail(value: unknown, folderId: number): value is Crumb[] {
+/**
+ * 导出（修复轮 1 / Important #2）：Task 7 导航写闸与 fast-path 必须共用此谓词——
+ * 此前 FilesPage 内联复制丢了 `typeof name === 'string'` 守卫，正是 6b 要防的漂移类。
+ */
+export function isUsableTrail(value: unknown, folderId: number): value is Crumb[] {
   if (!Array.isArray(value) || value.length === 0) return false
   const trail = value as Crumb[]
   const last = trail[trail.length - 1]
