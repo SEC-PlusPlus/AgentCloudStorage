@@ -16,7 +16,18 @@ export const PAGE_SIZE = 20
  */
 export type FileRow =
   | { kind: 'folder'; id: number; name: string; sizeText: null; dateText: string }
-  | { kind: 'file'; id: number; name: string; sizeBytes: number; sizeText: string; dateText: string; contentType: string }
+  | {
+      kind: 'file';
+      id: number;
+      name: string;
+      /** 终评修波 3：源目录 id（item.folder_id 上行）——搜索态行副标题查 ['navTrail'] 用；
+       *  浏览态行恒等于当前目录，本字段不读（与 FilesPage.sourceFolderOf 的 T13 carry #14 同源数据）。 */
+      folderId: number;
+      sizeBytes: number;
+      sizeText: string;
+      dateText: string;
+      contentType: string;
+    }
 
 /**
  * 纯合并函数（brief Step 1 钉死）：
@@ -41,6 +52,7 @@ export function mergeRows(folders: FolderItem[], files: FileItem[], _total: numb
     kind: 'file',
     id: item.id,
     name: item.original_name,
+    folderId: item.folder_id, // 终评修波 3：搜索行源目录副标题（仅行契约上行，零额外请求）
     sizeBytes: item.size, // Important-2：守卫判定用原始字节，展示仍走 sizeText
     sizeText: formatBytes(item.size),
     dateText: formatDate(item.created_at),

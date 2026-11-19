@@ -19,12 +19,12 @@ vi.mock('@/api/storage', () => ({
   downloadFile: vi.fn(),
 }))
 
-const IMG_ROW: FileRow = { kind: 'file', id: 1, name: 'photo.png', sizeBytes: 1024, sizeText: '1 KiB', dateText: '2026-01-01', contentType: 'image/png' }
+const IMG_ROW: FileRow = { kind: 'file', id: 1, name: 'photo.png', folderId: 0, sizeBytes: 1024, sizeText: '1 KiB', dateText: '2026-01-01', contentType: 'image/png' }
 const IMG_ROW_B: FileRow = { ...IMG_ROW, id: 2, name: 'photo2.png' }
-const VIDEO_ROW: FileRow = { kind: 'file', id: 3, name: 'clip.mp4', sizeBytes: 9 * 1024 * 1024, sizeText: '9 MiB', dateText: '2026-01-01', contentType: 'application/octet-stream' }
-const PDF_ROW: FileRow = { kind: 'file', id: 4, name: 'doc.pdf', sizeBytes: 2 * 1024 * 1024, sizeText: '2 MiB', dateText: '2026-01-01', contentType: 'application/pdf' }
-const TEXT_ROW: FileRow = { kind: 'file', id: 5, name: 'notes.md', sizeBytes: 3072, sizeText: '3 KiB', dateText: '2026-01-01', contentType: 'text/plain' }
-const BIN_ROW: FileRow = { kind: 'file', id: 6, name: 'archive.zip', sizeBytes: 40 * 1024 * 1024, sizeText: '40 MiB', dateText: '2026-01-01', contentType: 'application/octet-stream' }
+const VIDEO_ROW: FileRow = { kind: 'file', id: 3, name: 'clip.mp4', folderId: 0, sizeBytes: 9 * 1024 * 1024, sizeText: '9 MiB', dateText: '2026-01-01', contentType: 'application/octet-stream' }
+const PDF_ROW: FileRow = { kind: 'file', id: 4, name: 'doc.pdf', folderId: 0, sizeBytes: 2 * 1024 * 1024, sizeText: '2 MiB', dateText: '2026-01-01', contentType: 'application/pdf' }
+const TEXT_ROW: FileRow = { kind: 'file', id: 5, name: 'notes.md', folderId: 0, sizeBytes: 3072, sizeText: '3 KiB', dateText: '2026-01-01', contentType: 'text/plain' }
+const BIN_ROW: FileRow = { kind: 'file', id: 6, name: 'archive.zip', folderId: 0, sizeBytes: 40 * 1024 * 1024, sizeText: '40 MiB', dateText: '2026-01-01', contentType: 'application/octet-stream' }
 // 修复轮 1 / Important-1：后端如实存浏览器上报 type（upload_handler.go:46），octet 落库是常态路径
 const OCTET_PDF_ROW: FileRow = { ...PDF_ROW, id: 7, contentType: 'application/octet-stream' }
 const OCTET_JPG_ROW: FileRow = { ...IMG_ROW, id: 8, name: 'photo.jpg', contentType: 'application/octet-stream' }

@@ -31,7 +31,9 @@ export function LoginForm() {
     setPending(true)
     setErrorMessage(null)
     try {
-      const session = await login(email, password)
+      // trim 对齐旧 adbcfba AuthPage:19（终评修波 1）：粘贴邮箱常带首尾空格，
+      // 不修剪会把 ' x@y ' 原样送达后端、误触「邮箱格式不正确」类文案。
+      const session = await login(email.trim(), password)
       authActions.setSession(session.access_token, session.expires_at, session.user)
       navigate('/files')
     } catch (error) {

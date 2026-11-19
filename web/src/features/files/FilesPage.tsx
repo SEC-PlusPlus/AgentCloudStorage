@@ -48,7 +48,7 @@ import { RenameDialog } from './RenameDialog'
 import { RowContextMenu } from './RowContextMenu'
 import { RowToolbar } from './RowToolbar'
 import { useUploadManager } from './useUploadManager'
-import { FilesTable } from './FilesTable'
+import { FilesTable, searchSourceLabel } from './FilesTable'
 import { useFileRows } from './useFileRows'
 import type { FileRow } from './useFileRows'
 
@@ -259,6 +259,13 @@ export function FilesPage() {
           <FilesTable
             rows={state.rows}
             loading={state.isLoading}
+            // 终评修波 3：仅搜索态注入源目录副标题（渲染期只读 ['navTrail'] 缓存快照，
+            // cache-hit 链尾名 / cache-miss「目录 <id>」/ 根=「根目录」——TrashPage 原目录同纪律，无 BFS）。
+            searchSourceLabel={
+              state.keywordMode
+                ? (folderId) => searchSourceLabel(queryClient.getQueryData(navTrailKey(folderId)), folderId)
+                : undefined
+            }
             onFolderOpen={(row) => handleFolderOpen(row.id, row.name, row.kind)}
             onPreview={openPreview}
             onSelectionChange={setSelection}

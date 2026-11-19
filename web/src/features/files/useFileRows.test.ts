@@ -66,12 +66,12 @@ describe('mergeRows：纯函数契约', () => {
     expect(rows.map((r) => r.name)).toEqual(['报告.pdf', '报表.xlsx'])
   })
 
-  it('类型标注与格式化：sizeText= formatBytes、dateText= formatDate（folder 用 updated_at）', () => {
-    const rows = mergeRows([folder(1, '项目')], [file(10, 'a.txt', 1536)], 1)
+  it('类型标注与格式化：sizeText= formatBytes、dateText= formatDate（folder 用 updated_at）；folderId 上行（终评修波 3）', () => {
+    const rows = mergeRows([folder(1, '项目')], [file(10, 'a.txt', 1536, 3)], 1)
     const f = rows[0]
     const a = rows[1]
     expect(f).toMatchObject({ kind: 'folder', name: '项目', sizeText: null, dateText: '2026-02-02' })
-    expect(a).toMatchObject({ kind: 'file', name: 'a.txt', sizeText: '1.5 KB', dateText: '2026-03-03', contentType: 'text/plain' })
+    expect(a).toMatchObject({ kind: 'file', name: 'a.txt', sizeText: '1.5 KB', dateText: '2026-03-03', contentType: 'text/plain', folderId: 3 })
   })
 })
 

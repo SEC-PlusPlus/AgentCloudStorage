@@ -16,13 +16,32 @@ import {
 } from '@/components/glinui/components/table'
 import { Checkbox } from '@/components/glinui/components/checkbox'
 import { Skeleton } from '@/components/glinui/components/skeleton'
+import { ROOT_FOLDER_ID, ROOT_LABEL, isUsableTrail } from './crumbs'
 import type { FileRow } from './useFileRows'
 
 const noop = () => undefined
 
+/**
+ * 搜索行源目录副标题（终评修波 3，旧 adbcfba FileWorkbench:595「目录 ID · folder_id」承继）：
+ * 纯函数、TrashPage.sourceFolderLabel 同纪律——只读传入的 `['navTrail']` 缓存快照
+ * （isUsableTrail 同源谓词，拒降级空名链），命中取尾项名，**绝不触发 BFS**；
+ * 未命中 `目录 <id>`；根目录（folder_id=0）直给「根目录」（旧 `folder_id || '根目录'` 对齐，
+ * 同 TopBar 避闪「目录 0」）。缓存快照由 FilesPage 渲染期 getQueryData 后经 label 函数注入
+ * （本组件保持无 Provider 可独立渲染）。
+ */
+export function searchSourceLabel(cached: unknown, folderId: number): string {
+  if (isUsableTrail(cached, folderId)) return cached[cached.length - 1]?.name ?? ''
+  return folderId === ROOT_FOLDER_ID ? ROOT_LABEL : `目录 ${folderId}`
+}
+
 export interface FilesTableProps {
   rows: FileRow[]
   loading?: boolean
+  /**
+   * 搜索态行名下的源目录副标题（终评修波 3；FilesPage 仅 keywordMode 注入，缺省=不渲染、浏览态零变化）。
+   * 入参 FileRow.folderId，返回展示文案（cache-hit 链尾名 / `目录 <id>` / 根=「根目录」）。
+   */
+  searchSourceLabel?: (folderId: number) => string
   /** 双击文件行，或单击/Enter 聚焦的文件名按钮（Task 10 预览接线）。 */
   onPreview?: (row: FileRow) => void
   /** 右键行（Task 9 上下文菜单接线；pos 为视口坐标）。 */
@@ -41,6 +60,7 @@ const LOADING_ROWS = 5
 export function FilesTable({
   rows,
   loading = false,
+  searchSourceLabel,
   onPreview = noop,
   onContext = noop,
   onSelectionChange = noop,
@@ -164,15 +184,22 @@ export function FilesTable({
                   <span className="truncate">{row.name}</span>
                 </button>
               ) : (
-                // ⑭ 键盘入口：与文件夹名按钮同构（Enter/Space 原生触发=预览；focus-visible 环可见）
-                <button
-                  type="button"
-                  onClick={() => onPreview(row)}
-                  className="inline-flex max-w-full items-center gap-2 text-left text-[var(--color-foreground)] underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
-                >
-                  <FileText size={16} className="shrink-0 opacity-60" />
-                  <span className="truncate">{row.name}</span>
-                </button>
+                // ⑭ 键盘入口：与文件夹名按钮同构（Enter/Space 原生触发=预览；focus-visible 环可见）。
+                // 终评修波 3：搜索态（searchSourceLabel 在场）名下追加源目录副标题；
+                // 按钮 self-start 保持内容宽——聚焦环/悬停下划线范围与浏览态逐像素同构。
+                <span className="flex min-w-0 flex-col leading-tight">
+                  <button
+                    type="button"
+                    onClick={() => onPreview(row)}
+                    className="inline-flex max-w-full items-center gap-2 self-start text-left text-[var(--color-foreground)] underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+                  >
+                    <FileText size={16} className="shrink-0 opacity-60" />
+                    <span className="truncate">{row.name}</span>
+                  </button>
+                  {searchSourceLabel ? (
+                    <small className="truncate text-xs opacity-60">{searchSourceLabel(row.folderId)}</small>
+                  ) : null}
+                </span>
               )}
             </TableCell>
             <TableCell align="right" className="tabular-nums opacity-80">

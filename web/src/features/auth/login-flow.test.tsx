@@ -3,7 +3,7 @@
 // ②失败：ApiError.message 中文文案双载体可见——内联 Alert(role=alert) + toast.error，会话未写、不跳转；
 // ③限流：translateError 命中「too many login attempts」的等待时长文案原样显示（同样 alert+toast 双显）；
 // ④pending：请求未决时按钮 disabled，二次点击不重复提交；成功路径无 error toast。
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createMemoryRouter } from 'react-router'
 import { toast } from 'sonner'
@@ -97,6 +97,32 @@ describe('登录页流程（mock login）', () => {
     expect(useAuth.getState().token).toBe('')
     expect(sessionStorage.getItem(TOKEN_KEY)).toBeNull()
     expect(screen.queryByTestId('files-route')).toBeNull()
+  })
+
+  // 终评修波 1：旧 adbcfba AuthPage:19 `login(form.email.trim(), …)` 对齐——粘贴带首尾空格的
+  // 邮箱必须 trim 后送达 login 缝（行为钉在缝上；后端「邮箱格式不正确」类误触发的根因即未 trim）。
+  // jsdom 偏差双闸（均已在断言外处理，组件逻辑零旁路）：
+  // ① set 偏差：规范 email 的 value sanitization 仅去换行，首尾空格合法保留（浏览器原样入 value），
+  //   jsdom 在 set 时直接剪掉空格 → 常规赋值路径空格根本进不了受控 state。覆写 value getter
+  //   模拟规范浏览器值 ' sec@sec.xyz  '（React onChange 读 event.target.value，即真值通路）。
+  // ② submit 偏差：jsdom email validity 把带空格值判 invalid 拦截 submit（浏览器按规范先行裁剪
+  //   空白再验、放行提交）→ 用原生 dispatchEvent('submit') 复现浏览器「validity 通过→提交」结果。
+  it('trim：粘贴「 sec@sec.xyz  」→ login 收到修剪后的邮箱字符串', async () => {
+    loginMock.mockResolvedValue(sessionResponse)
+    await renderLoginPage()
+    // 理由：findByLabelText 静态型为 HTMLElement，需 .form 引用与 value 描述符覆写（HTMLInputElement 面）。
+    const emailInput = (await screen.findByLabelText('邮箱')) as HTMLInputElement
+    Object.defineProperty(emailInput, 'value', {
+      configurable: true,
+      get: () => ' sec@sec.xyz  ',
+      set: () => {},
+    })
+    fireEvent.change(emailInput)
+    fireEvent.change(screen.getByLabelText('密码'), { target: { value: 'hunter2hunter2' } })
+    await act(async () => {
+      emailInput.form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
+    expect(loginMock).toHaveBeenCalledWith('sec@sec.xyz', 'hunter2hunter2')
   })
 
   it('限流：translateError 等待时长文案原样显示（429）', async () => {

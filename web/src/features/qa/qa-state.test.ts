@@ -9,7 +9,7 @@ import type { FileRow } from '@/features/files/useFileRows'
 const ONE_MIB = 1 << 20
 
 function fileRow(name: string, sizeBytes: number): FileRow {
-  return { kind: 'file', id: 1, name, sizeBytes, sizeText: '', dateText: '', contentType: 'text/plain' }
+  return { kind: 'file', id: 1, name, folderId: 0, sizeBytes, sizeText: '', dateText: '', contentType: 'text/plain' }
 }
 
 describe('canAsk——旧 canAsk 正则 ∧ 旧发送守卫的合并移植', () => {

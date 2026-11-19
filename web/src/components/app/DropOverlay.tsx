@@ -45,15 +45,23 @@ export function DropOverlay({ onFiles }: DropOverlayProps) {
       const files = Array.from(event.dataTransfer?.files ?? [])
       if (files.length > 0) handlerRef.current(files)
     }
+    // 终评修波 2：Esc/OS 取消拖拽不发 drop，dragleave 对也不保证成对——无此复位则 depth 滞留 >0，
+    // 全屏遮罩卡死到下一轮拖拽周期。dragcancel 一律深度归零并隐藏。
+    const onCancel = () => {
+      depth.current = 0
+      setVisible(false)
+    }
     window.addEventListener('dragenter', onEnter)
     window.addEventListener('dragleave', onLeave)
     window.addEventListener('dragover', onOver)
     window.addEventListener('drop', onDrop)
+    window.addEventListener('dragcancel', onCancel)
     return () => {
       window.removeEventListener('dragenter', onEnter)
       window.removeEventListener('dragleave', onLeave)
       window.removeEventListener('dragover', onOver)
       window.removeEventListener('drop', onDrop)
+      window.removeEventListener('dragcancel', onCancel)
     }
   }, [])
 

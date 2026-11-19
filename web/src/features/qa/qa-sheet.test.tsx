@@ -14,7 +14,7 @@ vi.mock('@/api/knowledge', () => ({ askFile: vi.fn() }))
 const askFileMock = vi.mocked(askFile)
 
 const ROW: FileRow = {
-  kind: 'file', id: 7, name: 'notes.md', sizeBytes: 2048, sizeText: '2 KiB',
+  kind: 'file', id: 7, name: 'notes.md', folderId: 0, sizeBytes: 2048, sizeText: '2 KiB',
   dateText: '2026-01-01', contentType: 'text/markdown',
 }
 

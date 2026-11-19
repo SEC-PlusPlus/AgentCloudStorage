@@ -57,8 +57,9 @@ function LocationProbe() {
 
 let queryClient: QueryClient
 
-function renderPage(entry = '/files?folder=3') {
+function renderPage(entry = '/files?folder=3', seed?: (client: QueryClient) => void) {
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  seed?.(queryClient) // 渲染前预热缓存（终评修波：搜索行源目录副标题的 cache-hit 路径）
   render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[entry]}>
@@ -91,7 +92,7 @@ afterEach(() => {
 describe('FilesTable：行渲染与回调缝（Task 9/10 接线锚）', () => {
   const rows: FileRow[] = [
     { kind: 'folder', id: 7, name: '照片', sizeText: null, dateText: '2026-05-05' },
-    { kind: 'file', id: 10, name: 'a.txt', sizeBytes: 1536, sizeText: '1.5 KB', dateText: '2026-03-03', contentType: 'text/plain' },
+    { kind: 'file', id: 10, name: 'a.txt', folderId: 3, sizeBytes: 1536, sizeText: '1.5 KB', dateText: '2026-03-03', contentType: 'text/plain' },
   ]
 
   it('文件夹行前置；文件夹大小「—」；双击文件行 → onPreview；单击文件夹行 → onFolderOpen', async () => {
@@ -116,10 +117,10 @@ describe('FilesTable：行渲染与回调缝（Task 9/10 接线锚）', () => {
   it('rows 换引用 + 先前有勾选 → 清集并上抛空集合；勾选框态同步复位', async () => {
     const onSelectionChange = vi.fn()
     const rowsA: FileRow[] = [
-      { kind: 'file', id: 10, name: 'a.txt', sizeBytes: 1024, sizeText: '1.0 KB', dateText: '2026-03-03', contentType: 'text/plain' },
+      { kind: 'file', id: 10, name: 'a.txt', folderId: 3, sizeBytes: 1024, sizeText: '1.0 KB', dateText: '2026-03-03', contentType: 'text/plain' },
     ]
     const rowsB: FileRow[] = [
-      { kind: 'file', id: 20, name: 'b.txt', sizeBytes: 2048, sizeText: '2.0 KB', dateText: '2026-03-04', contentType: 'text/plain' },
+      { kind: 'file', id: 20, name: 'b.txt', folderId: 3, sizeBytes: 2048, sizeText: '2.0 KB', dateText: '2026-03-04', contentType: 'text/plain' },
     ]
     const { rerender } = render(<FilesTable rows={rowsA} onSelectionChange={onSelectionChange} />)
     await userEvent.click(screen.getByRole('checkbox', { name: '选择 a.txt' }))
@@ -132,7 +133,7 @@ describe('FilesTable：行渲染与回调缝（Task 9/10 接线锚）', () => {
     // 无勾选时换引用：不空报（避免噪声回调）
     onSelectionChange.mockClear()
     const rowsC: FileRow[] = [
-      { kind: 'file', id: 30, name: 'c.txt', sizeBytes: 3072, sizeText: '3.0 KB', dateText: '2026-03-05', contentType: 'text/plain' },
+      { kind: 'file', id: 30, name: 'c.txt', folderId: 3, sizeBytes: 3072, sizeText: '3.0 KB', dateText: '2026-03-05', contentType: 'text/plain' },
     ]
     rerender(<FilesTable rows={rowsC} onSelectionChange={onSelectionChange} />)
     expect(onSelectionChange).not.toHaveBeenCalled()
@@ -239,6 +240,30 @@ describe('FilesPage：URL 驱动全景', () => {
     expect(fetchMock.mock.calls.every(([u]) => !String(u).startsWith('/api/v1/folders'))).toBe(true)
     expect(screen.getByTestId('search-count')).toHaveTextContent('1 个结果')
     expect(screen.queryByText('照片')).toBeNull()
+  })
+
+  // 终评修波 3：旧 FileWorkbench（adbcfba）搜索行名下的「目录 ID · folder_id」副标题回归——
+  // 只读 ['navTrail'] 缓存（isUsableTrail 尾项名，TrashPage 原目录同款、无 BFS）；未命中「目录 <id>」，
+  // 根目录冷缓存直给「根目录」（旧 `folder_id || '根目录'` 对齐，TopBar 同理不闪「目录 0」）。
+  it('搜索行源目录副标题：冷缓存显「目录 3」/根行显「根目录」；暖缓存显链尾名「文档」；浏览态无副标题', async () => {
+    searchBody = { items: [FILE_A, FILE_B], pagination: { page: 1, page_size: 20, total: 2 } }
+    renderPage('/files?q=a')
+    expect(await screen.findByTestId('row-file:10')).toHaveTextContent('目录 3') // folder_id=3 冷缓存
+    expect(screen.getByTestId('row-file:11')).toHaveTextContent('根目录') // folder_id=0 冷缓存直给根名
+    cleanup()
+
+    renderPage('/files?q=a', (client) =>
+      setTrail(client, 3, [
+        { id: 0, name: '根目录' },
+        { id: 3, name: '文档' },
+      ]),
+    )
+    expect(await screen.findByTestId('row-file:10')).toHaveTextContent('文档') // 链尾名命中
+    cleanup()
+
+    renderPage() // 浏览态：同 id 行不得挂副标题（旧 v-else 语义=content_type 位不发明）
+    await screen.findByText('照片')
+    expect(screen.getByTestId('row-file:10')).not.toHaveTextContent('目录')
   })
 
   it('空目录：Empty + mascot；搜索无结果：Empty + 清除搜索动作', async () => {
@@ -383,6 +408,22 @@ describe('Task 8 上传接线：工具栏入口 / DropOverlay / 搜索态禁用'
     fireEvent.drop(window, dragInit([droppedFile()]))
     expect(screen.queryByTestId('drop-overlay')).toBeNull() // drop 复位深度计数并隐藏
     await waitFor(() => expect(fetchMock.mock.calls.some(isUploadPost)).toBe(true))
+  })
+
+  // 终评修波 2：Esc/OS 取消拖拽不发 drop/dragleave——无 dragcancel 复位则 depth 滞留 1、
+  // 全屏遮罩卡死到下一轮拖拽周期。dragcancel → depth=0 + 隐藏；用「下一轮 enter/leave 正常归零」显证深度确已重置。
+  it('dragcancel（Esc/系统取消）：遮罩立即隐藏且深度复位，下轮 enter/leave 周期正常', async () => {
+    renderPage()
+    await screen.findByText('照片')
+    fireEvent.dragEnter(window, dragInit([droppedFile()]))
+    expect(screen.getByTestId('drop-overlay')).toBeInTheDocument()
+    fireEvent(window, new Event('dragcancel'))
+    expect(screen.queryByTestId('drop-overlay')).toBeNull()
+
+    fireEvent.dragEnter(window, dragInit([droppedFile()]))
+    expect(screen.getByTestId('drop-overlay')).toBeInTheDocument()
+    fireEvent.dragLeave(window, dragInit([droppedFile()]))
+    expect(screen.queryByTestId('drop-overlay')).toBeNull() // 若 dragcancel 未清 depth，此处 leave 后遮罩仍在
   })
 
   it('搜索态禁止拖入（旧 FileWorkbench onDrop isSearching return）：无遮罩、无上传请求、按钮禁用', async () => {
