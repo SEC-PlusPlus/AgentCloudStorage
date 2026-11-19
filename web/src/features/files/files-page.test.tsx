@@ -3,6 +3,7 @@
 // （浏览渲染、?page= 翻页、?folder= 导航 + navTrail 追加契约[可用链写回/降级链不回写]、
 // ?q= 搜索模式[不发 folders、「N 个结果」]、空态 Empty+mascot、错误 Alert、加载 skeleton）。
 // fetch 桩按 URL 前缀路由（控制端裁定：不用位置序，并发顺序不定；同 unauthorized-wiring 修复）。
+// Task 8 追加上传接线锚：工具栏「上传文件」/window 级拖放（DropOverlay 计数显隐、投放 POST、搜索态禁用）。
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -10,6 +11,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Empty } from '@/components/app/Empty'
 import { Pagination, pageItems } from '@/components/app/Pagination'
+import { resetUploadManager } from './useUploadManager'
 import { FilesPage } from './FilesPage'
 import { FilesTable } from './FilesTable'
 import { isUsableTrail, navTrailKey, setTrail } from './crumbs'
@@ -76,12 +78,14 @@ beforeEach(() => {
   impl = defaultImpl
   fetchMock.mockClear()
   vi.stubGlobal('fetch', fetchMock)
+  resetUploadManager() // 上传队列为模块单例（同文件用例间无隔离，手动清）
 })
 
 afterEach(() => {
   impl = defaultImpl
   cleanup()
   vi.unstubAllGlobals()
+  resetUploadManager()
 })
 
 describe('FilesTable：行渲染与回调缝（Task 9/10 接线锚）', () => {
@@ -343,6 +347,49 @@ describe('FilesPage：URL 驱动全景', () => {
     expect(isUsableTrail([{ id: 0, name: '根目录' }], 3)).toBe(false) // 尾 id 不符
     expect(isUsableTrail(undefined, 3)).toBe(false)
     expect(isUsableTrail([], 3)).toBe(false)
+  })
+})
+
+describe('Task 8 上传接线：工具栏入口 / DropOverlay / 搜索态禁用', () => {
+  function droppedFile(): File {
+    return new File(['x'], '拖入.txt', { type: 'text/plain', lastModified: 1700000000000 })
+  }
+  function dragInit(files: File[]): Record<string, unknown> {
+    // RTL fireEvent 会把非事件字段直接挂到 event 上（dataTransfer 即如此构造）
+    return { dataTransfer: { files, types: ['Files'] } }
+  }
+  const isUploadPost = ([u, init]: unknown[]): boolean =>
+    String(u) === '/api/v1/files' && (init as RequestInit | undefined)?.method === 'POST'
+
+  it('浏览模式：拖入显遮罩、离开隐藏（enter/leave 计数归零）、放下发 POST /api/v1/files；按钮可用', async () => {
+    renderPage()
+    await screen.findByText('照片')
+    expect(screen.getByRole('button', { name: '上传文件' })).toBeEnabled()
+
+    fireEvent.dragEnter(window, dragInit([droppedFile()]))
+    expect(screen.getByTestId('drop-overlay')).toBeInTheDocument()
+    fireEvent.dragLeave(window, dragInit([droppedFile()]))
+    expect(screen.queryByTestId('drop-overlay')).toBeNull()
+
+    // 非文件拖入（types 无 Files、files 空）不触发遮罩
+    fireEvent.dragEnter(window, { dataTransfer: { files: [], types: ['text/plain'] } })
+    expect(screen.queryByTestId('drop-overlay')).toBeNull()
+
+    fireEvent.dragEnter(window, dragInit([droppedFile()]))
+    fireEvent.drop(window, dragInit([droppedFile()]))
+    expect(screen.queryByTestId('drop-overlay')).toBeNull() // drop 复位深度计数并隐藏
+    await waitFor(() => expect(fetchMock.mock.calls.some(isUploadPost)).toBe(true))
+  })
+
+  it('搜索态禁止拖入（旧 FileWorkbench onDrop isSearching return）：无遮罩、无上传请求、按钮禁用', async () => {
+    renderPage('/files?q=报告')
+    expect(await screen.findByText('报告.pdf')).toBeInTheDocument()
+
+    fireEvent.dragEnter(window, dragInit([droppedFile()]))
+    expect(screen.queryByTestId('drop-overlay')).toBeNull()
+    fireEvent.drop(window, dragInit([droppedFile()]))
+    expect(fetchMock.mock.calls.some(isUploadPost)).toBe(false)
+    expect(screen.getByRole('button', { name: '上传文件' })).toBeDisabled()
   })
 })
 

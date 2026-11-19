@@ -1,18 +1,23 @@
-// 应用外壳（Task 4 骨架 + Task 6 实装）：固定背景层 + TopBar（品牌/面包屑/用量）+ Outlet + 底部 Dock。
+// 应用外壳（Task 4 骨架 + Task 6 实装 + Task 8 上传接线）：固定背景层 + TopBar（品牌/面包屑/用量）+ Outlet + 底部 Dock。
 // R-T4-a2 背景占位 swap 已兑现：CSS 占位类删除，改用 vendored AuroraBackground + DotPattern（同 LoginRoute 用法）。
 // 401 接线效应原样保留（Review Focus #1）：挂载注册、卸载反注册。
+// Task 8：Dock onUpload 注入真实实现（openPicker→隐藏 input→队列 submit）；上传队列面板挂外壳层，
+// 跨 /files、/trash 持续可见（旧版进度区块只存在于工作台页）。onSearch/onNewFolder 维持 noop（Task 13/9）。
 import { useEffect } from 'react'
 import { Outlet, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { setUnauthorizedHandler } from '@/api/client'
 import { AuroraBackground } from '@/components/glinui/components/aurora-background'
 import { DotPattern } from '@/components/glinui/components/dot-pattern'
-import { Dock } from '@/components/app/Dock'
+import { Dock, noopDockActions } from '@/components/app/Dock'
 import { TopBar } from '@/components/app/TopBar'
+import { UploadQueuePanel } from '@/components/app/UploadQueuePanel'
+import { useUploadManager } from '@/features/files/useUploadManager'
 import { authActions } from '@/stores/auth'
 
 export function AppLayout() {
   const navigate = useNavigate()
+  const uploadManager = useUploadManager()
 
   useEffect(() => {
     // 401 接线：request/fileContentResponse 的 401 分支 → 清会话 → toast → 跳 /login。
@@ -43,7 +48,8 @@ export function AppLayout() {
         <Outlet />
       </main>
 
-      <Dock />
+      <Dock actions={{ ...noopDockActions, onUpload: uploadManager.openPicker }} />
+      <UploadQueuePanel />
     </div>
   )
 }

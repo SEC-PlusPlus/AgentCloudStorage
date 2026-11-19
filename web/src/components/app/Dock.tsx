@@ -3,7 +3,7 @@
 // 结构偏离说明：vendored GlassDock（PATH B 编译件）items API 只支持 icon+onClick 的裸 button，
 // 无法内嵌 DropdownMenu；故「用户」做 dock 同栏相邻控件（同一玻璃条内、分隔线隔开），
 // 视觉分组不变。TODO(Task 13 swap)：registry 源码恢复后评估把用户项收回 dock 内部。
-// DockActions 本任务只以 noop 渲染（搜索的命令面板/上传/新建弹窗由 Task 7/8/9 注入实现）。
+// DockActions 由 AppLayout 注入（Task 8 实装 onUpload；搜索命令面板 Task 13、新建弹窗 Task 9 仍 noop）。
 import { Command, FolderPlus, Home, LogOut, SunMoon, Trash2, Upload } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { GlassDock, type GlassDockItem } from '@/components/glinui/components/glass-dock'
@@ -25,9 +25,9 @@ export interface DockActions {
 
 const noop = () => undefined
 
-// TODO(Task 8/9/13)：真实实现注入点——onUpload=上传对话框（input/分片流程，Task 8）、onNewFolder=新建目录
-// modal（Task 9）、onSearch=命令面板（vendored command/cmdk 已可用；**Task 13** registry swap 后接线——
-// 修复轮 1 更正旧指针「随 Task 7 落地」：Task 7 裁定搜索入口为 TopBar 输入框 ?q=，面板 UI 顺延 Task 13）。
+// 注入点现状（Task 8 更新）：onUpload=已接线（AppLayout → useUploadManager.openPicker 隐藏 input，分片/续传流程
+// 见 lib/uploads）；onNewFolder=新建目录 modal（Task 9）、onSearch=命令面板（vendored command/cmdk 已可用；
+// **Task 13** registry swap 后接线——Task 7 裁定搜索入口为 TopBar 输入框 ?q=，面板 UI 顺延 Task 13）仍 noop。
 export const noopDockActions: DockActions = { onUpload: noop, onSearch: noop, onNewFolder: noop }
 
 export function Dock({ actions = noopDockActions }: { actions?: DockActions }) {

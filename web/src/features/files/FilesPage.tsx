@@ -6,16 +6,21 @@
 // 让 TopBar 的 resolveAncestorPath BFS 自愈重试（深链场景点击子目录属罕见路径，不伪造前缀）。
 // 越页兜底（修复轮 1 / Important #1）：后端对 page>ceil(total/pageSize) 返回 200+空 items
 // （file_handler.go:185-238），这不是空目录——落定后 replace 回最后有效页，历史不留死页。
+// Task 8 追加：工具栏「上传文件」入口 + 拖放上传（DropOverlay 仅浏览模式挂载——旧 FileWorkbench
+// onDrop 的 `if (isSearching...) return` 等价且更强：搜索态连遮罩视觉都不出现；投放目录=当前 ?folder=）。
 import { useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { Alert, AlertDescription, AlertTitle } from '@/components/glinui/components/alert'
 import { Badge } from '@/components/glinui/components/badge'
+import { Button } from '@/components/glinui/components/button'
+import { DropOverlay } from '@/components/app/DropOverlay'
 import { Empty } from '@/components/app/Empty'
 import { Pagination } from '@/components/app/Pagination'
 import { folderIdFromLocation } from '@/components/app/TopBar'
 import { ApiError } from '@/api/client'
 import { isUsableTrail, navTrailKey, setTrail } from '@/features/files/crumbs'
+import { useUploadManager } from './useUploadManager'
 import { FilesTable } from './FilesTable'
 import { useFileRows } from './useFileRows'
 
@@ -29,6 +34,7 @@ export function FilesPage() {
   const { pathname, search } = useLocation()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const uploadManager = useUploadManager()
 
   const folderId = folderIdFromLocation(pathname, search)
   const keyword = searchParams.get('q')
@@ -75,11 +81,22 @@ export function FilesPage() {
         <h1 className="text-lg font-medium text-[var(--color-foreground)]">
           {state.keywordMode ? <>搜索「{keyword?.trim()}」</> : '文件'}
         </h1>
-        {state.keywordMode && !state.isLoading && !state.isError ? (
-          <span data-testid="search-count">
-            <Badge variant="glass">{state.total} 个结果</Badge>
-          </span>
-        ) : null}
+        <div className="flex items-center gap-2">
+          {state.keywordMode && !state.isLoading && !state.isError ? (
+            <span data-testid="search-count">
+              <Badge variant="glass">{state.total} 个结果</Badge>
+            </span>
+          ) : null}
+          {/* 旧工具栏上传按钮语义：busy（队列搬运中）|| isSearching（?q=）禁用 */}
+          <Button
+            variant="glass"
+            size="sm"
+            disabled={state.keywordMode || uploadManager.busy}
+            onClick={uploadManager.openPicker}
+          >
+            上传文件
+          </Button>
+        </div>
       </div>
 
       {state.isError ? (
@@ -126,6 +143,11 @@ export function FilesPage() {
           ) : null}
         </>
       )}
+
+      {/* 拖放上传：仅浏览模式挂载（搜索态禁拖入=旧 onDrop 行为）；落点目录=当前 ?folder= */}
+      {!state.keywordMode ? (
+        <DropOverlay onFiles={(files) => uploadManager.submitFiles(files, folderId)} />
+      ) : null}
     </div>
   )
 }
