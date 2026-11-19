@@ -159,7 +159,7 @@ TanStack Query key：`['files',folderId,page]`、`['folders',parentId]`、`['tra
 
 - **禁止 AI 生成**任何 logo/品牌/装饰图片
 - 新素材一律采用**网络现存设计**：开放授权图标/插画（lucide、simple-icons、OpenGameArt/itch.io CC0 像素包等）
-- 每个采用的素材在 `web/docs/asset-credits.md` 登记：名称、来源 URL、作者、许可证（仅接受 MIT / CC0 / CC-BY，CC-BY 须署名）
+- 每个采用的素材在 `web/docs/asset-credits.md` 登记：名称、来源 URL、作者、许可证（仅接受 MIT / ISC / CC0 / CC-BY，CC-BY 须署名）
 - 保留并使用：`cloud-gopher-pixel.png`（登录 hero、空态、拖放遮罩）、`StorageScene.vue` 的 SVG 动画场景（移植为 React 组件 `GopherScene`，含 prefers-reduced-motion 逻辑）
 - `BrandMark.vue` 内手绘 SVG 不作废旧版（用户可继续用），但**新的主 logo 以现存素材为准**，实施第 1 步完成候选筛选并交用户确认样式
 

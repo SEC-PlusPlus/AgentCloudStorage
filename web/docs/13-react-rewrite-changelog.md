@@ -17,3 +17,134 @@
 | 2026-11-19 | Task 11 (ebb683c..18daaba) | Task 11 回收站：分页/恢复/永久删除/原目录兜底 | `features/trash/TrashPage.tsx`：同外壳复用 vendored `Table` 原语 + self-build `Pagination`/`Empty`（mascot 土拨鼠）——**裁定：不进 `FilesTable` 回调缝**（回收站行集 files-only，勾选/预览/右键三缝皆不适用；`mergeRows` 行契约无 `deleted_at/folder_id` 亦不适用，故薄映射自带），不新增 SELF-BUILD 件（manifest 不动）。列集（plan Interfaces）=名称（名+类型小字，`content_type || '未知类型'` 旧兜底）/大小 `formatBytes`/删除时间 `formatDate(deleted_at)`（缺失「—」=旧 `date()` 兜底）/原目录/操作（恢复直按、永久删除走 `alert-dialog`，行内 busy 锁同旧 `:loading/:disabled` 语义）。`sourceFolderLabel(cached, folderId)` 纯函数：只读 `['navTrail', id]` 缓存经 `isUsableTrail` 同源谓词（拒降级空名链）取尾项名，未命中 `#<folder_id>` 兜底——**裁定：不为该列触发 BFS 冷扫描**（用例钉「无 folders 请求」）。文案全部逐字移植 adbcfba `TrashPage.vue`：页头「回收站/N 个项目」、副标题「这里的文件可以恢复，或永久删除。」、加载「正在读取回收站…」+骨架、空态两行、底部警示条（含 spec §5.4 点名的「永久删除后无法恢复」句）、确认弹窗（标题「永久删除文件」+ 旧 ElMessageBox 原文「永久删除“X”？该操作无法撤销。」+ 按钮「永久删除/取消」）、成功 toast「“X”已恢复。/“X”已永久删除。」、错误 `ApiError` 中文透传 + 旧**每操作专属兜底**（恢复失败/永久删除失败/暂时无法读取回收站——文案不同于通用 `mutationErrorMessage`，故页内 `trashError` 小函数复刻旧三元形态）。**失效零分叉**：成功路径直接吃 `actions.computeInvalidations`——restore 携 `toFolder=item.folder_id`（回放到源目录，currentFolder=0 形参对该型不参与）、perm-delete 无参型；`applyInvalidations` 后 `['trash']` 前缀失效即重取（=旧 `load()`），失败路径零失效。URL 即状态 `?page=`（FilesPage 同款 parsePage），越页钳位 Important #1 同因同修（后端死页 200+空 items → replace 回最后有效页）；`total≤pageSize` 不渲染分页条（旧 `v-if` 语义）。`routes/TrashRoute.tsx` 兑现 `/trash` 占位：`trash-route` 锚点保留（占位期测试锚约定），根 div 加 `trash-page`；守卫复用 authGuard 不动。**dev 手测清单（交用户复核，Step 2）**：①Dock 回收站进入→列表/分页显示；②恢复→toast + 文件列表出现该文件；③永久删除→确认弹窗→toast + 顶栏用量条回落；④空态 mascot 文案；⑤刷新深链 `?page=2`/越页回退 | §5.4 | RED 先行：`trash-page.test.tsx` 先败（`./TrashPage` import 解析失败）后全绿 15 例——列集/文案逐字（COPY 常量自 adbcfba 抄录）、加载文案+骨架互斥、错误 Alert 中文映射、空态两行、原目录三态（navTrail 命中「照片」/根目录链/未命中 `#9` + 零 folders 请求）、分页接线（点第 2 页→`trash?page=2`+URL、深链越界 replace 钳位、单页不显条）、恢复成功（`POST files/10/restore` + 旧 toast + 失效键**精确序** `[['files',7],['search'],['trash'],['usage']]`，actions.ts 真实输出）/失败透传零失效、永久删除（cancel 不发 DELETE → confirm 精确序 `[['trash'],['usage']]`/失败零失效）、路由注册（`routeObjects` 进 `/trash` 真实页+占位文案消失、未登录弹回 `/login`）；`npm test -- --run` **250 passed**（基线 235+15，pristine）；`npm run build`（tsc -b + vite）零错误，JS gzip 198.67 KB < 250 KB |
 | 2026-11-19 | Task 12 (249a8f1..1ff7153) | Task 12 文件问答 sheet：多轮对话 + IME 安全提交 + AbortSignal | `features/qa/qa-state.ts`：`QaTurn`/`appendTurn`（纯函数：尾部 failed assistant 被重试结果**替换**、同文本连续 user 轮 no-op——「失败轮重试不重复计入」两规则钉死）/`canAsk(row)`=旧 adbcfba:308 正则 `/\.(txt|md)$/i` ∧ `sizeBytes <= 1<<20`（**不复用 TEXT_PREVIEW_KINDS**——T10 Minor-5：log/csv 属预览不属问答；字节走 FileRow.sizeBytes=Important-2 上行）；reason 中文：超限=旧 :614 逐字、类型=旧 intro 口径新拟（已在报告标注）。`QaSheet.tsx`：vendored sheet 承载 MessageScroller/PromptInput/Message/Thinking 四件 self-build（`// self-build — TODO(Task 13 swap to glinui registry <name>)` 头注）；旧文案逐字上屏：placeholder「例如：这份资料的主要结论是什么？」、计数「N / 500」（原始长度非 trim）、kicker 资料问答/标题 向文件提问/关闭问答 aria-label/intro/「正在从文件中寻找回答…」/引用注脚/空回答兜底「模型没有返回回答，请重试。」；错误=**ApiError 500 专属旧 :365 文案逐字**红调 failed 气泡+「重试」（重发同问、不追加用户轮、替换尾部失败气泡），其余走 mutationErrorMessage（旧 apiMessage 等价载体）。**abort 接线（plan-sanctioned 新增，旧版无 stop）**：关闭/卸载 = `controller.abort()`，`signal.aborted` 的迟到响应静默丢弃（旧 :360/:363 generation 守卫语义承接）；busy 时发送位换「停止回答」。对话状态活组件实例：开=按文件新对话、关=卸载清空（plan-simplicity 裁定，已注记）。接线三路：PreviewSheet 头部（minor ⑮ 占位退役→canAsk 门控启用；不合格=**aria-disabled+onClick 守卫**而非原生 disabled——disabled 吞 pointer/focus 事件令 vendored Radix tooltip 的 reason 不可达，d.ts 确认 Trigger asChild；tooltip=mode B 件）/RowToolbar 单选文件/RowContextMenu（项 disabled 由 canAsk 驱动）；`FilesPage.openAsk` 逐字承接旧 :312「开问答先关预览」。IME 门双通道：compositionstart/end ref + `nativeEvent.isComposing` 旗标，Shift+Enter 保留换行；贴底判定 `shouldStickToBottom(scrollTop,scrollHeight,clientHeight,80)` 纯函数（等号放行、0 高度=贴底），stickRef 记忆滚动意图——上滚不抢位+「跳到最新」浮钮；thinking 三点 animate-bounce+motion-reduce 静态降级（静态 delay 类表，JIT 可生成）。 | §5.3:118 | RED 先行：`qa-state.test.ts` 首跑 import 即败；**canAsk 边界 ±1 字节钉死（恰等 1 MiB 放行——旧 `>` 等号原样；+1 拒 reason=旧超限逐字）、大小写 `.MD/.TxT` 命中、log/csv/readme/文件夹拒、双不合格先报类型**；appendTurn 6 例（不可变/替换/annotate/连续同文本 no-op 同引用/隔轮同文本追加/failed 后新问不吞）；`shouldStickToBottom` 数学 3 组 + scroller 行为 3 例（role=log+aria-live=polite、越阈值浮「跳到最新」、贴底自动跟进/上滚不抢位，defineProperty 桩高度）；`PromptInput` 7 例（**compositionStart 后 Enter 不提交、isComposing 旗标同挡、compositionEnd 恢复**、Shift+Enter 不提交、空白不提交+按钮 disabled、计数 3/500+maxlength+placeholder 逐字、busy→停止回答按钮 onStop、不合格双禁、height 写过）；`qa-sheet.test.tsx` 全流程 8 例（faked askFile：文案钉屏 5 项逐字、pending→thinking→answer+`(id,question,signal)` 参形+输入清空、空回答兜底、**半途关闭 `signal.aborted===true` 且迟到答案不落屏**、停止=abort 无 failed 气泡可续用、500→alert 旧文案逐字+重试重发同问+**用户气泡 getAllByText=1**+failed 被替换、404 中文透传、log aria-live）；既有锚 3 处随接线改写（preview-sheet 占位退役→启用/双 reason 悬停例——user-event scroll-lock 下 BODY pointer-events:none 禁移出故不 unhover，actions-flow 菜单可用+预览→问答交接）；`npm test -- --run` **285 passed**（基线 250+35，pristine 无告警）；`npm run build` 零错误，index gzip 204.43 KB（+5.8 KB） |
 | 2026-11-19 | Task 13a (f45d0f8..a22a064) | Task 13a 品牌场景移植 + deferred minors 全清单清扫（carry A/A2 组） | `feat 187abeb + fix a22a064`。GopherScene.tsx 新建（carry #22）：逐坐标移植 StorageScene.vue（adbcfba）——rAF 沿 flight path 飞包（5300ms 周期、750ms 起飞窗）+ prefers-reduced-motion 静态降级 (350,154)（旧 syncMotion 语义镜像；jsdom 无几何 API 时 draw 守卫停环不空转）；接入登录卡下部带（mascot PNG 留 header）、files/trash 空态（Empty children，搜索无结果态不挂免噪音）、DropOverlay 角落（caption 关）。#24 spec §5.1「卡片上方」措辞按 R(T5-mascot) 钉死为卡内 header；#23 favicon 核实已接线（Task 6b index.html，无需改动）。A 组处理：#1 standards §5 引文改 spec §6 锚点、#2 白名单补 ISC（口径统一）、#3 smoke jsdom url 固化 vite.config、#4 根 tsconfig paths 死块删、#5 孤儿 App.tsx 删+smoke 重指（删除随 scene commit）、#6 setUnauthorizedHandler 改 save-restore 前值、#7 mergeRows 死早退删条件保注释（_total 前缀应 noUnusedParameters）、#8 当前页 aria-disabled 保焦点（测试同步）、#10 手造 ?folder=&q= 组合注释、#11 直传进行中行隐藏取消钮+测试、#12 上传面板头显落点目录（根目录/暖链名/目录#id 三态+3 测试）、#13 FolderPicker aria-pressed/aria-selected 去重+roving-tabindex TODO 扩+测试同步、#14 搜索态 from 键用 item.folder_id（sourceFolderOf+dialog fromFolder，2 新测试）、#15 move 失效精确调用序（收紧时发现旧 arrayContaining 连 ['search'] 缺失都测不出）、#16 批量失败语义惯例注释（下载中断/回收站继续=有意择一）、#17 navTrail 旧名 60s 窗口注释、#18 mime 双判优先序声明、#19 文件夹钮 focus ring 对称、#20 回收站表头回旧 verbatim「删除日期」（测试同步）、#21 T12 评审裁定支持实现方→新文案维持不动（记录）。A2：#21a QaSheet key={qaRow.id} 加固+openAsk 镜像注释（换文件路径现 modal 不可达，remount 语义=旧 :312）、#21b Thinking 弃 role=status 改 aria-hidden 归外层 log 播报（测试同步）、#21c 旧 :350 文案不可达注释备案、#21d IME compositionend→keydown 时间闸按 carry 许可暂缓（理由注释，真机报障再启）。跳过记录：#9 Empty live-region 常驻需把播报容器提升到路由外全局壳层（组件契约改动+跨页播报归属不明），收益不确定，按评审原话注释备案不强制。 | §5.1、§5.3、§5.4、§7.1、§9 | `npm test -- --run` 25 files / **294 passed**（基线 285+9：GopherScene 3、#11 1、#12 3、#14 2；行为项 #8/#13/#20/#21b 均测试同步）；`npm run build` 0 error；dist js gzip **206.02KB <250KB**（Task 12 204.43KB +1.59KB=场景件+接入）；输出 pristine |
+| 2026-11-19 | 披露（13a-mred） | Task 13a 钉区间中途红注记 | 13a 行钉区 `f45d0f8..a22a064` 内，`187abeb`（场景移植）单独检出为红：孤儿 `App.tsx` 于该提交删除，而 smoke 测试重指落在 `a22a064`（carry #5 拆两步所致）。区间终点与 HEAD 均绿（294 passed），按「不重写历史」裁定原样保留，此处一行明示。 | §9 | 无代码改动；区间端点绿状由各后续任务行与下方 Task 13b 门禁复跑证实 |
+| 2026-11-19 | Task 13b (c28e0d3..b615068) | Task 13b 验收批次：registry swap 尝试 / C26 脚本修 / 验收清单 / housekeeping | **C25 swap 尝试（累计第 17 次探测）**：`glinui.com` 3×20s 连接超时（HTTP 000，根路径与 `/r/items/glass-dock.json` 双 URL）→ 不通，PATH B 编译产物 31 组件维持现状，自建件 13 项不动，swap 计划保留于 manifest（部署后网络窗口再试）。**C26 脚本修两处 + 顺手第三处**：`--out` 无值（或后随 token 以 `--` 开头）即时守卫退出；结尾 exit 由「全 MISS 才非零」改「**任意 MISS 即非零**」；并修复 names 过滤既有 bug（不带 `--out` 时 `outIdx+1=0` 吞掉首个条目名——此前该调用形态直接报「pass at least one」）。toast 栈唯一化系 swap 条件项（「若换源」）未触发，留 registry 可达时随 swap 批次。**D27 bundle 复测**：`dist/assets/index-*.js` gzip **206.02 KB < 250 KB**（与 13a 持平，本轮零功能代码改动）；单 chunk 682.88 kB > 500 kB 系 vite **advisory 提示级**（非错误，代码拆分决策留部署复盘）。**验收清单落盘**：本文末新增「验收清单」节（A 自动化 / B API 冒烟 / C 手动浏览器矩阵三层，C 组逐条带预期行为与结果栏）；spec §7.1 素材白名单补 ISC（控制端裁定 13a-m2，与 §5.1 措辞编辑先例及 asset-credits 已落地口径统一）。**本地 API 冒烟前提检查**：`127.0.0.1:8080/healthz` 连接拒绝（本任务纪律：不代起服务）→ B 组全部转「待用户」。**Housekeeping**：仓库根 `glass-spike/`（未跟踪，spec §3「骨架建立后删除」兑现）已删除，删前 `git ls-files glass-spike` 为空核实；`web/dev-out/` 再次证实为**幻影目录**（磁盘不存在 + git 0 文件），无可删。 | §3、§7.1、§8、§11、Review Focus 全 5 项 | `npm test -- --run` 25 files / **294 passed**（基线不变，pristine 零告警）；`npm run build` **0 错误**（gzip 数值见上）；脚本守卫离线核过三场景（无值/`--out --dry`/无 names 均 exit 1）+ names 解析两形态输出核对；glass-spike 删除不影响 git（未跟踪） |
+
+## 验收清单（Task 13b · 2026-11-19）
+
+> 三层：**A** 自动化项（Task 13b 本批已跑）；**B** API 级冒烟（需本地 Go 后端；本批探测 8080 无服务，全部待用户）；**C** 手动浏览器矩阵（用户逐条点击，每条带预期行为一句话；跑完把「待测」改 **PASS**/**FAIL**，FAIL 行附一句现象，回填后并入 changelog 终行）。覆盖 spec §5 全部五屏（登录/外壳/文件工作台/回收站/问答 sheet）+ Review Focus 全 5 项 + 各任务 changelog 挂过的 dev 手测交接项（登录视觉、深链 `?folder=3`、>49MiB 续传/取消/合并锁定、预览四类型+100MiB 守卫、回收站、问答含 IME/停止/500 重试、明暗主题、dock 放大、测帧、emoji 文件名下载）。
+
+### A · 自动化项（本批实测，无需用户操作）
+
+| # | 项目 | 结果 |
+|---|---|---|
+| A1 | `npm test -- --run` 全量 | **294 passed / 25 files**，pristine 零告警 |
+| A2 | `npm run build` | **0 错误**；JS gzip **206.02 KB < 250 KB**（D27 达标）；chunk>500kB 为 vite advisory 提示级非错误 |
+| A3 | glinui.com registry 探测（C25，累计第 17 次） | 3×20s 全部超时（HTTP 000）→ 不换源，PATH B 维持 |
+| A4 | 本地 Go 后端 `127.0.0.1:8080/healthz` | 连接拒绝（本任务纪律：不代起服务）→ B 组转待用户 |
+
+### B · API 级冒烟（只读 GET；待用户在后端就绪后执行）
+
+前提：本地 Go 后端起于 8080 且 `/healthz` 返回 200（本批未擅自起服务，故 B 组全部「待测」）。先取 token：
+`curl -s -X POST http://127.0.0.1:8080/api/v1/auth/login -H 'Content-Type: application/json' -d '{"email":"…","password":"…"}'` → 记 `token`，下列均带 `-H "Authorization: Bearer $TOKEN"`。
+
+| # | 请求 | 预期 | 结果 |
+|---|---|---|---|
+| B1 | `GET /api/v1/files?folder_id=0&page=1` | 200，JSON 含 items + 分页字段 | 待测 |
+| B2 | `GET /api/v1/files/search?q=测&page=1` | 200，命中集按名匹配 | 待测 |
+| B3 | `GET /api/v1/folders?parent_id=0` | 200，根目录子文件夹数组 | 待测 |
+| B4 | `GET /api/v1/uploads/{id}`（任一会话 id；无则先造） | 200 JSON；404/409 为前端 forget+全新 start 合法路径（Review Focus #2 的 API 侧） | 待测 |
+| B5 | `GET /api/v1/files/{id}/content`（文本小文件） | 200 字节流，Content-Type 与落库 mime 一致（octet 规范化锚点） | 待测 |
+| B6 | `GET /api/v1/trash?page=1` | 200，回收站分页数组 | 待测 |
+| B7 | `GET /api/v1/storage/usage` | 200，**必须含 `quota_bytes`**（后端唯一改动点） | 待测 |
+
+### C · 手动浏览器矩阵（`cd web && npm run dev`，默认暗色）
+
+**C1 登录屏（spec §5.1；含 Task 5 视觉交接项）**
+
+| # | 步骤 | 预期行为（一行） | 结果 |
+|---|---|---|---|
+| C1.1 | 打开 `/login` | 全屏 aurora 背景 + 居中玻璃卡：header 表单上方为土拨鼠 mascot 图，卡片下部 GopherScene 动画带飞包循环；标签页 favicon=云像素图 | 待测 |
+| C1.2 | 错误密码登录 | 中文错误 toast/alert，不跳路由、不清输入焦点 | 待测 |
+| C1.3 | 正确凭据登录 | 跳 `/files`，外壳出现 dock+navbar | 待测 |
+| C1.4 | 注册入口 | 保持禁用（产品决策，同旧版） | 待测 |
+| C1.5 | 系统开「减少动态效果」后刷新 `/login` | GopherScene 停 rAF、显示静态降级帧（土拨鼠在卡内固定位） | 待测 |
+
+**C2 应用外壳（spec §5.2；dock 手感 + 主题交接项）**
+
+| # | 步骤 | 预期行为（一行） | 结果 |
+|---|---|---|---|
+| C2.1 | hover 底部 dock 各图标 | macOS 式相邻放大（magnify）平滑无跳格，tooltip 显示名称 | 待测 |
+| C2.2 | 点 dock「搜索」 | 唤起 command 命令面板，输入关键词出命中文件，回车跳对应目录 | 待测 |
+| C2.3 | 看 navbar 右侧 | 用量条显示 `已用 / 总量(quota_bytes)` + 百分比 progress | 待测 |
+| C2.4 | 用户菜单切 light → 刷新 | `.dark` 摘除、全站浅色，刷新后保持（localStorage `acs.theme`） | 待测 |
+| C2.5 | 用户菜单「退出登录」 | 会话清空 → 跳 `/login`，再直连 `/files` 被守卫弹回 | 待测 |
+
+**C3 文件工作台·浏览/导航（spec §5.3；含深链交接项 + Review Focus #3）**
+
+| # | 步骤 | 预期行为（一行） | 结果 |
+|---|---|---|---|
+| C3.1 | `/files` 打开 | 文件夹前置混排（同旧版），20 条/页服务端分页，翻页不重排 | 待测 |
+| C3.2 | 双击进文件夹 → 点 navbar 面包屑中间层 | URL `?folder=N` 变化，祖先链完整显示且可点 | 待测 |
+| C3.3 | **深链**：新标签直开 `?folder=3` 并刷新 | 面包屑完整祖先链一次到位（BFS/缓存），列表照常加载 | 待测 |
+| C3.4 | 手造 `?folder=3&q=词` 组合 URL 打开 | 进入关键词态，结果列表不受 folder 参数干扰 | 待测 |
+| C3.5 | 勾选 2 行 | dock 上方浮条出现：下载/移动/重命名/移入回收站/问AI（多选时重命名与问AI 仅单选可用，见计数文案） | 待测 |
+| C3.6 | 行右键 | context-menu 与浮条同操作集 + 预览；键盘方向键/Esc 可用 | 待测 |
+
+**C4 上传（spec §5.3；含 >49MiB 交接项 + Review Focus #2/#5）**
+
+| # | 步骤 | 预期行为（一行） | 结果 |
+|---|---|---|---|
+| C4.1 | 拖一个小文件到窗口 | 全窗 DropOverlay 出现（快速进出无闪烁），drop 后 toast「已上传 1 个文件。」 | 待测 |
+| C4.2 | <49MiB 直传进行中看队列行 | 行内**无取消按钮**（直传不可断，carry #11 语义） | 待测 |
+| C4.3 | 上传 >49MiB，中途关标签页再重开 `/files` | 右下队列面板显目标目录+续传行，仅补传缺失分片完成（四字段匹配） | 待测 |
+| C4.4 | >49MiB 上传中点「取消」 | toast「已取消当前大文件上传。」，记录清除、不残留卡死行 | 待测 |
+| C4.5 | 大文件进入「合并中」阶段 | 该行取消按钮消失（合并禁断，旧 544 行语义） | 待测 |
+| C4.6 | **Review Focus #2**：大文件传一半后使服务端会话失效（cancel 或删记录），点重试 | progress 回 404/409 → 自动 forget + 全新 start，队列不卡死 | 待测 |
+| C4.7 | **Review Focus #5**：配额将满时传大文件（或调小配额） | 507 → 行标失败「云仓可用存储空间不足。」，记录保留；删内容清理后重试成功 | 待测 |
+| C4.8 | 搜索态（关键词结果页）拖文件 | 无遮罩、不触发上传（搜索禁拖强于旧版静默） | 待测 |
+
+**C5 预览（spec §5.3；含四类型 + 100MiB 守卫交接项）**
+
+| # | 步骤 | 预期行为（一行） | 结果 |
+|---|---|---|---|
+| C5.1 | 依次预览 png/jpg、mp4、pdf、txt 四类 | 右侧 sheet：img 自适应 / video 原生播放 / pdf iframe 内渲 / 文本 code-panel | 待测 |
+| C5.2 | 预览 >512KiB 文本 | 截断显示 + Badge「已截断…」（旧文案额度） | 待测 |
+| C5.3 | 预览 >100MiB 非文本文件 | 不发内容请求，显示旧文案拒绝 + 「直接下载」动作；恰 100MiB 放行 | 待测 |
+| C5.4 | 预览 .json / .svg（无 ct=image 时） | download-only 空态 + 直接下载，不发内容请求 | 待测 |
+| C5.5 | 键盘：聚焦行 Enter / 双击 / 右键「预览」三路 | 三路都打开同一 sheet，关闭后焦点回落行 | 待测 |
+
+**C6 回收站（spec §5.4；回收站交接项）**
+
+| # | 步骤 | 预期行为（一行） | 结果 |
+|---|---|---|---|
+| C6.1 | dock 回收站 | 表格+服务端分页；表头为旧 verbatim「**删除日期**」 | 待测 |
+| C6.2 | 行「恢复」 | toast + 原目录列表即时可见该文件 | 待测 |
+| C6.3 | 行「永久删除」 | alert-dialog 确认含「永久删除后无法恢复」，确认后行消失、usage 更新 | 待测 |
+| C6.4 | 清空后看空态 | `empty` 空态 + 土拨鼠场景静态/动画 | 待测 |
+| C6.5 | 删除非空文件夹（文件列表内） | 409 中文透传「文件夹内仍有…」，弹窗/菜单不白屏 | 待测 |
+
+**C7 文件问答 sheet（spec §5.3；Q&A 交接项）**
+
+| # | 步骤 | 预期行为（一行） | 结果 |
+|---|---|---|---|
+| C7.1 | 单选一个 txt → 「问 AI」 | sheet 打开，message-scroller 空态 + prompt-input 可用 | 待测 |
+| C7.2 | 对 >1MiB/非文本文件（预览或菜单入口） | 不可问答路径显示「暂不支持问答…」类文案，不发请求 | 待测 |
+| C7.3 | 输入法打「你好」选词完成后按 Enter | composition 期间 Enter 只确认候选不提交；组合完成后的 Enter 才发送（IME-safe） | 待测 |
+| C7.4 | 提问后观察回答流 | thinking 指示出现→答案逐段追加，滚动条自动跟底 | 待测 |
+| C7.5 | 回答中点「停止」 | AbortSignal 中断请求，已有部分保留，输入框恢复可用 | 待测 |
+| C7.6 | 后端停一下再提问（或断网 5 秒） | 500/网络错误显示中文映射 toast，恢复后重打一次可成功（500 retry） | 待测 |
+
+**C8 操作集与缓存一致性（含 Review Focus #4 + emoji 下载交接项）**
+
+| # | 步骤 | 预期行为（一行） | 结果 |
+|---|---|---|---|
+| C8.1 | 重命名单行（用同名冲突） | 409 中文 toast 且弹窗保持打开；成功后列表+面包屑即时新名 | 待测 |
+| C8.2 | **Review Focus #4**：把 A 目录文件移到 B，立刻回退/前进/重进两个目录 | 源、目标、面包屑、navbar 用量四者都更新，无幽灵行 | 待测 |
+| C8.3 | 移动到自身子目录 | 服务端 409「invalid folder move」类中文透传，前端不自裁 | 待测 |
+| C8.4 | Dock「新建文件夹」→ 名称纯空格 | 确认禁用；正常名称回车创建成功并进新目录（toast） | 待测 |
+| C8.5 | 下载 🎉 表情文件名 的文件 | 另存对话框文件名原样保留 emoji（锚点法 download 属性） | 待测 |
+
+**C9 会话过期（Review Focus #1）**
+
+| # | 步骤 | 预期行为（一行） | 结果 |
+|---|---|---|---|
+| C9.1 | DevTools 把 sessionStorage token 改成过期值 → 刷新并任意操作 | 401 → 会话清、toast「登录已过期」、跳 `/login`，无白屏无残留数据 | 待测 |
+
+**C10 性能测帧（D28，spec §7.2 验收标准）**
+
+| # | 步骤 | 预期行为（一行） | 结果 |
+|---|---|---|---|
+| C10.1 | 备一个约 150 行数据的目录（批量上传或脚本造） | 列表 20/页，共约 8 页 | 待测 |
+| C10.2 | 1080p 窗口，DevTools Performance → 录制，滚轮持续滚动列表 60 秒（含跨页翻页） | 无 >50ms 长任务持续堆积（偶发 GC 可），帧率观感流畅 | 待测 |
+| C10.3 | 录制中顺带 hover dock 各图标一遍 | magnify 动画不掉帧不卡顿 | 待测 |
