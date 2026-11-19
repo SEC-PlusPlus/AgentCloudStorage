@@ -15,6 +15,7 @@ import { GlassCard, GlassCardContent, GlassCardFooter, GlassCardHeader } from '@
 import { Heading } from '@/components/glinui/components/heading'
 import { Input } from '@/components/glinui/components/input'
 import { Field } from '@/components/app/Field'
+import { GopherScene } from '@/components/app/GopherScene'
 import { authActions } from '@/stores/auth'
 
 export function LoginForm() {
@@ -103,7 +104,10 @@ export function LoginForm() {
         </form>
       </GlassCardContent>
 
-      <GlassCardFooter className="pt-2 text-center">
+      {/* T13 carry #22：品牌场景（旧 AuthPage StorageScene 的移植落位）=卡片下部带；
+          mascot PNG 保留在 header（R(T5-mascot) 措辞随 spec §5.1 更新，见 changelog 13a 行）。 */}
+      <GlassCardFooter className="flex flex-col items-center gap-2 pt-2 text-center">
+        <GopherScene className="max-w-[360px]" />
         <p className="text-xs text-[var(--color-foreground)] opacity-60">注册暂未开放</p>
       </GlassCardFooter>
     </GlassCard>

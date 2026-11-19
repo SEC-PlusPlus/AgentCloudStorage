@@ -91,7 +91,7 @@ web/src/
 
 ### 5.1 登录 `/login`
 
-全屏 `aurora-background` + 居中 `glass-card` 登录表单（`field`/`input`/`label`，`liquid-button` 提交）。**卡片上方为土拨鼠 mascot 图（cloud-gopher-pixel.png）**，`blur-fade` 入场。注册入口保持禁用（API 仍开放，同旧版产品决策）。错误走 `alert` + toast；限流错误显示等待时长文案。
+全屏 `aurora-background` + 居中 `glass-card` 登录表单（`field`/`input`/`label`，`liquid-button` 提交）。**卡片内 header 表单上方为土拨鼠 mascot 图（cloud-gopher-pixel.png）**（T13a 措辞钉死：原文「卡片上方」按 R(T5-mascot)「表单上方」精神落实现=卡内 header 区，实现不回改；卡片下部为 GopherScene 品牌场景带），`blur-fade` 入场。注册入口保持禁用（API 仍开放，同旧版产品决策）。错误走 `alert` + toast；限流错误显示等待时长文案。
 
 ### 5.2 应用外壳（AppShell）——底部 dock 布局（用户决定）
 

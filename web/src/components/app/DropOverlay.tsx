@@ -5,6 +5,7 @@
 // 素材复用 cloud-gopher-pixel.png（asset-credits 已登记；装饰性 alt=""）。
 import { useEffect, useRef, useState } from 'react'
 import { EMPTY_MASCOT_SRC } from '@/components/app/Empty'
+import { GopherScene } from '@/components/app/GopherScene'
 
 export interface DropOverlayProps {
   onFiles(files: File[]): void
@@ -70,6 +71,8 @@ export function DropOverlay({ onFiles }: DropOverlayProps) {
         className="h-24 w-auto [image-rendering:pixelated] drop-shadow-[0_1px_2px_rgb(0_0_0/_0.45)]"
       />
       <span className="text-sm text-white/90">松开鼠标，上传到当前目录</span>
+      {/* T13 carry #22：品牌场景角落位（caption 关闭——遮罩瞬态，文案噪音无益；整遮罩 aria-hidden）。 */}
+      <GopherScene showCaption={false} className="absolute bottom-6 right-6 max-w-[240px] opacity-70" />
     </div>
   )
 }
