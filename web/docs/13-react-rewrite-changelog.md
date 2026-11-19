@@ -18,7 +18,7 @@
 | 2026-11-19 | Task 12 (249a8f1..1ff7153) | Task 12 文件问答 sheet：多轮对话 + IME 安全提交 + AbortSignal | `features/qa/qa-state.ts`：`QaTurn`/`appendTurn`（纯函数：尾部 failed assistant 被重试结果**替换**、同文本连续 user 轮 no-op——「失败轮重试不重复计入」两规则钉死）/`canAsk(row)`=旧 adbcfba:308 正则 `/\.(txt|md)$/i` ∧ `sizeBytes <= 1<<20`（**不复用 TEXT_PREVIEW_KINDS**——T10 Minor-5：log/csv 属预览不属问答；字节走 FileRow.sizeBytes=Important-2 上行）；reason 中文：超限=旧 :614 逐字、类型=旧 intro 口径新拟（已在报告标注）。`QaSheet.tsx`：vendored sheet 承载 MessageScroller/PromptInput/Message/Thinking 四件 self-build（`// self-build — TODO(Task 13 swap to glinui registry <name>)` 头注）；旧文案逐字上屏：placeholder「例如：这份资料的主要结论是什么？」、计数「N / 500」（原始长度非 trim）、kicker 资料问答/标题 向文件提问/关闭问答 aria-label/intro/「正在从文件中寻找回答…」/引用注脚/空回答兜底「模型没有返回回答，请重试。」；错误=**ApiError 500 专属旧 :365 文案逐字**红调 failed 气泡+「重试」（重发同问、不追加用户轮、替换尾部失败气泡），其余走 mutationErrorMessage（旧 apiMessage 等价载体）。**abort 接线（plan-sanctioned 新增，旧版无 stop）**：关闭/卸载 = `controller.abort()`，`signal.aborted` 的迟到响应静默丢弃（旧 :360/:363 generation 守卫语义承接）；busy 时发送位换「停止回答」。对话状态活组件实例：开=按文件新对话、关=卸载清空（plan-simplicity 裁定，已注记）。接线三路：PreviewSheet 头部（minor ⑮ 占位退役→canAsk 门控启用；不合格=**aria-disabled+onClick 守卫**而非原生 disabled——disabled 吞 pointer/focus 事件令 vendored Radix tooltip 的 reason 不可达，d.ts 确认 Trigger asChild；tooltip=mode B 件）/RowToolbar 单选文件/RowContextMenu（项 disabled 由 canAsk 驱动）；`FilesPage.openAsk` 逐字承接旧 :312「开问答先关预览」。IME 门双通道：compositionstart/end ref + `nativeEvent.isComposing` 旗标，Shift+Enter 保留换行；贴底判定 `shouldStickToBottom(scrollTop,scrollHeight,clientHeight,80)` 纯函数（等号放行、0 高度=贴底），stickRef 记忆滚动意图——上滚不抢位+「跳到最新」浮钮；thinking 三点 animate-bounce+motion-reduce 静态降级（静态 delay 类表，JIT 可生成）。 | §5.3:118 | RED 先行：`qa-state.test.ts` 首跑 import 即败；**canAsk 边界 ±1 字节钉死（恰等 1 MiB 放行——旧 `>` 等号原样；+1 拒 reason=旧超限逐字）、大小写 `.MD/.TxT` 命中、log/csv/readme/文件夹拒、双不合格先报类型**；appendTurn 6 例（不可变/替换/annotate/连续同文本 no-op 同引用/隔轮同文本追加/failed 后新问不吞）；`shouldStickToBottom` 数学 3 组 + scroller 行为 3 例（role=log+aria-live=polite、越阈值浮「跳到最新」、贴底自动跟进/上滚不抢位，defineProperty 桩高度）；`PromptInput` 7 例（**compositionStart 后 Enter 不提交、isComposing 旗标同挡、compositionEnd 恢复**、Shift+Enter 不提交、空白不提交+按钮 disabled、计数 3/500+maxlength+placeholder 逐字、busy→停止回答按钮 onStop、不合格双禁、height 写过）；`qa-sheet.test.tsx` 全流程 8 例（faked askFile：文案钉屏 5 项逐字、pending→thinking→answer+`(id,question,signal)` 参形+输入清空、空回答兜底、**半途关闭 `signal.aborted===true` 且迟到答案不落屏**、停止=abort 无 failed 气泡可续用、500→alert 旧文案逐字+重试重发同问+**用户气泡 getAllByText=1**+failed 被替换、404 中文透传、log aria-live）；既有锚 3 处随接线改写（preview-sheet 占位退役→启用/双 reason 悬停例——user-event scroll-lock 下 BODY pointer-events:none 禁移出故不 unhover，actions-flow 菜单可用+预览→问答交接）；`npm test -- --run` **285 passed**（基线 250+35，pristine 无告警）；`npm run build` 零错误，index gzip 204.43 KB（+5.8 KB） |
 | 2026-11-19 | Task 13a (f45d0f8..a22a064) | Task 13a 品牌场景移植 + deferred minors 全清单清扫（carry A/A2 组） | `feat 187abeb + fix a22a064`。GopherScene.tsx 新建（carry #22）：逐坐标移植 StorageScene.vue（adbcfba）——rAF 沿 flight path 飞包（5300ms 周期、750ms 起飞窗）+ prefers-reduced-motion 静态降级 (350,154)（旧 syncMotion 语义镜像；jsdom 无几何 API 时 draw 守卫停环不空转）；接入登录卡下部带（mascot PNG 留 header）、files/trash 空态（Empty children，搜索无结果态不挂免噪音）、DropOverlay 角落（caption 关）。#24 spec §5.1「卡片上方」措辞按 R(T5-mascot) 钉死为卡内 header；#23 favicon 核实已接线（Task 6b index.html，无需改动）。A 组处理：#1 standards §5 引文改 spec §6 锚点、#2 白名单补 ISC（口径统一）、#3 smoke jsdom url 固化 vite.config、#4 根 tsconfig paths 死块删、#5 孤儿 App.tsx 删+smoke 重指（删除随 scene commit）、#6 setUnauthorizedHandler 改 save-restore 前值、#7 mergeRows 死早退删条件保注释（_total 前缀应 noUnusedParameters）、#8 当前页 aria-disabled 保焦点（测试同步）、#10 手造 ?folder=&q= 组合注释、#11 直传进行中行隐藏取消钮+测试、#12 上传面板头显落点目录（根目录/暖链名/目录#id 三态+3 测试）、#13 FolderPicker aria-pressed/aria-selected 去重+roving-tabindex TODO 扩+测试同步、#14 搜索态 from 键用 item.folder_id（sourceFolderOf+dialog fromFolder，2 新测试）、#15 move 失效精确调用序（收紧时发现旧 arrayContaining 连 ['search'] 缺失都测不出）、#16 批量失败语义惯例注释（下载中断/回收站继续=有意择一）、#17 navTrail 旧名 60s 窗口注释、#18 mime 双判优先序声明、#19 文件夹钮 focus ring 对称、#20 回收站表头回旧 verbatim「删除日期」（测试同步）、#21 T12 评审裁定支持实现方→新文案维持不动（记录）。A2：#21a QaSheet key={qaRow.id} 加固+openAsk 镜像注释（换文件路径现 modal 不可达，remount 语义=旧 :312）、#21b Thinking 弃 role=status 改 aria-hidden 归外层 log 播报（测试同步）、#21c 旧 :350 文案不可达注释备案、#21d IME compositionend→keydown 时间闸按 carry 许可暂缓（理由注释，真机报障再启）。跳过记录：#9 Empty live-region 常驻需把播报容器提升到路由外全局壳层（组件契约改动+跨页播报归属不明），收益不确定，按评审原话注释备案不强制。 | §5.1、§5.3、§5.4、§7.1、§9 | `npm test -- --run` 25 files / **294 passed**（基线 285+9：GopherScene 3、#11 1、#12 3、#14 2；行为项 #8/#13/#20/#21b 均测试同步）；`npm run build` 0 error；dist js gzip **206.02KB <250KB**（Task 12 204.43KB +1.59KB=场景件+接入）；输出 pristine |
 | 2026-11-19 | 披露（13a-mred） | Task 13a 钉区间中途红注记 | 13a 行钉区 `f45d0f8..a22a064` 内，`187abeb`（场景移植）单独检出为红：孤儿 `App.tsx` 于该提交删除，而 smoke 测试重指落在 `a22a064`（carry #5 拆两步所致）。区间终点与 HEAD 均绿（294 passed），按「不重写历史」裁定原样保留，此处一行明示。 | §9 | 无代码改动；区间端点绿状由各后续任务行与下方 Task 13b 门禁复跑证实 |
-| 2026-11-19 | Task 13b (c28e0d3..b615068) | Task 13b 验收批次：registry swap 尝试 / C26 脚本修 / 验收清单 / housekeeping | **C25 swap 尝试（累计第 17 次探测）**：`glinui.com` 3×20s 连接超时（HTTP 000，根路径与 `/r/items/glass-dock.json` 双 URL）→ 不通，PATH B 编译产物 31 组件维持现状，自建件 13 项不动，swap 计划保留于 manifest（部署后网络窗口再试）。**C26 脚本修两处 + 顺手第三处**：`--out` 无值（或后随 token 以 `--` 开头）即时守卫退出；结尾 exit 由「全 MISS 才非零」改「**任意 MISS 即非零**」；并修复 names 过滤既有 bug（不带 `--out` 时 `outIdx+1=0` 吞掉首个条目名——此前该调用形态直接报「pass at least one」）。toast 栈唯一化系 swap 条件项（「若换源」）未触发，留 registry 可达时随 swap 批次。**D27 bundle 复测**：`dist/assets/index-*.js` gzip **206.02 KB < 250 KB**（与 13a 持平，本轮零功能代码改动）；单 chunk 682.88 kB > 500 kB 系 vite **advisory 提示级**（非错误，代码拆分决策留部署复盘）。**验收清单落盘**：本文末新增「验收清单」节（A 自动化 / B API 冒烟 / C 手动浏览器矩阵三层，C 组逐条带预期行为与结果栏）；spec §7.1 素材白名单补 ISC（控制端裁定 13a-m2，与 §5.1 措辞编辑先例及 asset-credits 已落地口径统一）。**本地 API 冒烟前提检查**：`127.0.0.1:8080/healthz` 连接拒绝（本任务纪律：不代起服务）→ B 组全部转「待用户」。**Housekeeping**：仓库根 `glass-spike/`（未跟踪，spec §3「骨架建立后删除」兑现）已删除，删前 `git ls-files glass-spike` 为空核实；`web/dev-out/` 再次证实为**幻影目录**（磁盘不存在 + git 0 文件），无可删。 | §3、§7.1、§8、§11、Review Focus 全 5 项 | `npm test -- --run` 25 files / **294 passed**（基线不变，pristine 零告警）；`npm run build` **0 错误**（gzip 数值见上）；脚本守卫离线核过三场景（无值/`--out --dry`/无 names 均 exit 1）+ names 解析两形态输出核对；glass-spike 删除不影响 git（未跟踪） |
+| 2026-11-19 | Task 13b (c28e0d3..b615068 + fix 2c6a92e) | Task 13b 验收批次：registry swap 尝试 / C26 脚本修 / 验收清单 / housekeeping | **C25 swap 尝试（累计第 17 次探测）**：`glinui.com` 3×20s 连接超时（HTTP 000，根路径与 `/r/items/glass-dock.json` 双 URL）→ 不通，PATH B 编译产物 31 组件维持现状，自建件 13 项不动，swap 计划保留于 manifest（部署后网络窗口再试）。**C26 脚本修两处 + 顺手第三处**：`--out` 无值（或后随 token 以 `--` 开头）即时守卫退出；结尾 exit 由「全 MISS 才非零」改「**任意 MISS 即非零**」；并修复 names 过滤既有 bug（不带 `--out` 时 `outIdx+1=0` 吞掉首个条目名——此前该调用形态直接报「pass at least one」）。toast 栈唯一化系 swap 条件项（「若换源」）未触发，留 registry 可达时随 swap 批次。**D27 bundle 复测**：`dist/assets/index-*.js` gzip **206.02 KB < 250 KB**（与 13a 持平，本轮零功能代码改动）；单 chunk 682.88 kB > 500 kB 系 vite **advisory 提示级**（非错误，代码拆分决策留部署复盘）。**验收清单落盘**：本文末新增「验收清单」节（A 自动化 / B API 冒烟 / C 手动浏览器矩阵三层，C 组逐条带预期行为与结果栏）；spec §7.1 素材白名单补 ISC（控制端裁定 13a-m2，与 §5.1 措辞编辑先例及 asset-credits 已落地口径统一）。**本地 API 冒烟前提检查**：`127.0.0.1:8080/healthz` 连接拒绝（本任务纪律：不代起服务）→ B 组全部转「待用户」。**Housekeeping**：仓库根 `glass-spike/`（未跟踪，spec §3「骨架建立后删除」兑现）已删除，删前 `git ls-files glass-spike` 为空核实；`web/dev-out/` 再次证实为**幻影目录**（磁盘不存在 + git 0 文件），无可删。**修复轮 1（2c6a92e，评审 Needs fixes：3 Important + 1 Minor 全修）**：C2.2 原描述了未实装的命令面板（HEAD 上 dock onSearch 仍 noop）→ 按裁定**接实**：AppLayout `onSearch` 最小接线=聚焦 TopBar `form[role=search]` 搜索输入框（+1 条 jsdom 焦点锚）；面板 UI 顺延单列 C2.6「待换源窗口」行；矩阵评审点名 6 行补齐（C3.7 TopBar 搜索 UI 流 / C3.8 folder·page·q 三态前进后退 / C3.9 files 空目录场景带 / C5.6 octet 存储内渲 / C6.6 底部警示条 / C6.7 trash `?page=` 深链越页）；C6.3 文案错位拆分——dialog 正文逐字＝`永久删除“X”？该操作无法撤销。`，spec §5.4 点名句「永久删除后无法恢复」在页面底部警示条（TrashPage:259），各归各行；Minor-5 备案：下次起 registry 可用性探测统一以 `vendor-glinui.mjs --dry` 退出码记录。 | §3、§7.1、§8、§11、Review Focus 全 5 项 | `npm test -- --run` 25 files / **295 passed**（基线 294 + 修复轮 dock 搜索接线 1，pristine 零告警）；`npm run build` **0 错误**（接线后 gzip **206.06 KB** 仍 <250 KB）；脚本守卫离线核过三场景（无值/`--out --dry`/无 names 均 exit 1）+ names 解析两形态输出核对；glass-spike 删除不影响 git（未跟踪） |
 
 ## 验收清单（Task 13b · 2026-11-19）
 
@@ -28,9 +28,9 @@
 
 | # | 项目 | 结果 |
 |---|---|---|
-| A1 | `npm test -- --run` 全量 | **294 passed / 25 files**，pristine 零告警 |
+| A1 | `npm test -- --run` 全量 | **295 passed / 25 files**（修复轮 1 后；294 基线 + dock 搜索接线锚），pristine 零告警 |
 | A2 | `npm run build` | **0 错误**；JS gzip **206.02 KB < 250 KB**（D27 达标）；chunk>500kB 为 vite advisory 提示级非错误 |
-| A3 | glinui.com registry 探测（C25，累计第 17 次） | 3×20s 全部超时（HTTP 000）→ 不换源，PATH B 维持 |
+| A3 | glinui.com registry 探测（C25，累计第 17 次） | 3×20s 全部超时（HTTP 000）→ 不换源，PATH B 维持；下次起统一以 `vendor-glinui.mjs --dry` 退出码记录（修复轮 Minor-5 备案） |
 | A4 | 本地 Go 后端 `127.0.0.1:8080/healthz` | 连接拒绝（本任务纪律：不代起服务）→ B 组转待用户 |
 
 ### B · API 级冒烟（只读 GET；待用户在后端就绪后执行）
@@ -65,10 +65,11 @@
 | # | 步骤 | 预期行为（一行） | 结果 |
 |---|---|---|---|
 | C2.1 | hover 底部 dock 各图标 | macOS 式相邻放大（magnify）平滑无跳格，tooltip 显示名称 | 待测 |
-| C2.2 | 点 dock「搜索」 | 唤起 command 命令面板，输入关键词出命中文件，回车跳对应目录 | 待测 |
+| C2.2 | 点 dock「搜索」 | 光标进入顶栏「搜索文件…」输入框（修复轮 1 实装：noop→focus，jsdom 已锚；随后键入+回车进 `?q=` 结果态即 C3.7） | 待测 |
 | C2.3 | 看 navbar 右侧 | 用量条显示 `已用 / 总量(quota_bytes)` + 百分比 progress | 待测 |
 | C2.4 | 用户菜单切 light → 刷新 | `.dark` 摘除、全站浅色，刷新后保持（localStorage `acs.theme`） | 待测 |
 | C2.5 | 用户菜单「退出登录」 | 会话清空 → 跳 `/login`，再直连 `/files` 被守卫弹回 | 待测 |
+| C2.6 | （顺延项）dock「搜索」→ command/cmdk 命令面板 UI | 当前版**无面板**：Task 7 裁定入口=顶栏输入框 `?q=`（C2.2+C3.7），面板 UI 顺延 registry 换源窗口后再评估 | 顺延 |
 
 **C3 文件工作台·浏览/导航（spec §5.3；含深链交接项 + Review Focus #3）**
 
@@ -80,6 +81,9 @@
 | C3.4 | 手造 `?folder=3&q=词` 组合 URL 打开 | 进入关键词态，结果列表不受 folder 参数干扰 | 待测 |
 | C3.5 | 勾选 2 行 | dock 上方浮条出现：下载/移动/重命名/移入回收站/问AI（多选时重命名与问AI 仅单选可用，见计数文案） | 待测 |
 | C3.6 | 行右键 | context-menu 与浮条同操作集 + 预览；键盘方向键/Esc 可用 | 待测 |
+| C3.7 | 顶栏搜索 UI 全流程：键关键词→Enter→清空→Enter | 提交后 URL `?q=`、列表顶部 Badge「**N 个结果**」计数；清空再提交退出搜索态回目录浏览（folder 不随 q 携带） | 待测 |
+| C3.8 | 前进/后退跨三态：进子目录、翻页、提交搜索后各按一次浏览器 ←/→ | folder / page / q 三种 URL 态与视图一致恢复不串台（搜索草稿反向同步已 jsdom 锚，此处浏览器复核） | 待测 |
+| C3.9 | 新建空文件夹并进入 | files 空目录=Empty 空态 + GopherScene 土拨鼠动画带（区别于 C6.4 回收站空态；搜索无结果态刻意**不**挂场景免噪音） | 待测 |
 
 **C4 上传（spec §5.3；含 >49MiB 交接项 + Review Focus #2/#5）**
 
@@ -103,6 +107,7 @@
 | C5.3 | 预览 >100MiB 非文本文件 | 不发内容请求，显示旧文案拒绝 + 「直接下载」动作；恰 100MiB 放行 | 待测 |
 | C5.4 | 预览 .json / .svg（无 ct=image 时） | download-only 空态 + 直接下载，不发内容请求 | 待测 |
 | C5.5 | 键盘：聚焦行 Enter / 双击 / 右键「预览」三路 | 三路都打开同一 sheet，关闭后焦点回落行 | 待测 |
+| C5.6 | 预览落库 mime=`application/octet-stream` 的 pdf/jpg/mp4（旧导入或直传遗留） | blob 类型规范化后内渲：pdf iframe 直接显示**而非触发下载**（Task 10 修复轮 1 / Important-1 路径复核） | 待测 |
 
 **C6 回收站（spec §5.4；回收站交接项）**
 
@@ -110,9 +115,11 @@
 |---|---|---|---|
 | C6.1 | dock 回收站 | 表格+服务端分页；表头为旧 verbatim「**删除日期**」 | 待测 |
 | C6.2 | 行「恢复」 | toast + 原目录列表即时可见该文件 | 待测 |
-| C6.3 | 行「永久删除」 | alert-dialog 确认含「永久删除后无法恢复」，确认后行消失、usage 更新 | 待测 |
+| C6.3 | 行「永久删除」 | alert-dialog 标题「永久删除文件」+ 正文逐字 `永久删除“X”？该操作无法撤销。`；确认后行消失、usage 更新 | 待测 |
 | C6.4 | 清空后看空态 | `empty` 空态 + 土拨鼠场景静态/动画 | 待测 |
 | C6.5 | 删除非空文件夹（文件列表内） | 409 中文透传「文件夹内仍有…」，弹窗/菜单不白屏 | 待测 |
+| C6.6 | 看回收站页**底部警示条**（非弹窗） | 逐字旧文案常驻：「永久删除后无法恢复。恢复的文件会回到原目录；如果原目录不存在，服务端可能无法恢复。」（spec §5.4 点名句在此处，C6.3 弹窗正文是其上） | 待测 |
+| C6.7 | 直开 `/trash?page=2` 刷新；再手造 `?page=999` | 第二页正常显示；越页不白屏不报错（空列表或回退——以实际行为回填本行） | 待测 |
 
 **C7 文件问答 sheet（spec §5.3；Q&A 交接项）**
 
