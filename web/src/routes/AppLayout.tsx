@@ -4,7 +4,9 @@
 // Task 8：Dock onUpload 注入真实实现（openPicker→隐藏 input→队列 submit）；上传队列面板挂外壳层，
 // 跨 /files、/trash 持续可见（旧版进度区块只存在于工作台页）。
 // Task 9：Dock onNewFolder 实装=新建目录 modal（弹窗挂外壳层：Dock 全路由可见，
-// 落点目录=folderIdFromLocation——/trash 或搜索态=根目录，与旧版 folderID 语义一致）。onSearch 维持 noop（Task 13）。
+// 落点目录=folderIdFromLocation——/trash 或搜索态=根目录，与旧版 folderID 语义一致）。
+// T13b 修复轮 1（评审裁定）：onSearch 由 noop 转最小接线=聚焦 TopBar 搜索输入框（Task 7 裁定入口
+// 本就是 ?q= 驱动的顶栏输入框）；command/cmdk 面板 UI 仍顺延 registry 换源窗口（验收清单 C2.6）。
 import { useEffect, useState } from 'react'
 import { Outlet, useNavigate } from 'react-router'
 import { toast } from 'sonner'
@@ -60,6 +62,11 @@ export function AppLayout() {
           ...noopDockActions,
           onUpload: uploadManager.openPicker,
           onNewFolder: () => setNewFolderOpen(true),
+          onSearch: () => {
+            // 聚焦顶栏搜索框（TopBar form[role=search] 内 input，placeholder「搜索文件…」）；
+            // 键入+Enter 走既有 ?q= 提交流，本接线只搬光标不发明新状态。
+            document.querySelector<HTMLInputElement>('[role="search"] input')?.focus()
+          },
         }}
       />
       <UploadQueuePanel />

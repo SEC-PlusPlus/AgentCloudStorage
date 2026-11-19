@@ -28,8 +28,8 @@ const noop = () => undefined
 
 // 注入点现状（Task 9 更新）：onUpload=AppLayout → useUploadManager.openPicker 隐藏 input（分片/续传见 lib/uploads）；
 // onNewFolder=AppLayout → features/files/NewFolderDialog（挂外壳层，Dock 全路由可用）；
-// onSearch=命令面板（vendored command/cmdk 已可用；**Task 13** registry swap 后接线——Task 7 裁定搜索入口为
-// TopBar 输入框 ?q=，面板 UI 顺延 Task 13）仍 noop。
+// onSearch=T13b 修复轮 1 已接线：AppLayout 聚焦 TopBar 搜索输入框（Task 7 裁定入口=?q= 驱动）；
+// 命令面板 UI（vendored command/cmdk 已可用）仍顺延 registry swap 窗口（验收清单 C2.6）。
 export const noopDockActions: DockActions = { onUpload: noop, onSearch: noop, onNewFolder: noop }
 
 export function Dock({ actions = noopDockActions }: { actions?: DockActions }) {

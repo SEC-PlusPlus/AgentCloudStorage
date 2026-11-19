@@ -4,11 +4,12 @@ import type { ReactNode } from 'react'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { MemoryRouter, useLocation } from 'react-router'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getStorageUsage, listFolders, type FolderItem } from '@/api/storage'
 import { Dock } from '@/components/app/Dock'
 import { TopBar } from '@/components/app/TopBar'
+import { AppLayout } from '@/routes/AppLayout'
 import { ROOT_LABEL, navTrailKey, setTrail } from '@/features/files/crumbs'
 import { ThemeProvider } from '@/providers/theme'
 import { authActions, useAuth } from '@/stores/auth'
@@ -203,5 +204,21 @@ describe('TopBar：搜索入口（?q= 驱动）', () => {
     await userEvent.clear(box)
     await userEvent.keyboard('{Enter}')
     await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/files'))
+  })
+})
+
+// T13b 修复轮 1（评审裁定）：dock「搜索」最小接线=聚焦 TopBar 搜索输入框（Task 7 裁定入口即 ?q= 驱动
+// 输入框）；command/cmdk 面板 UI 仍顺延 registry 换源窗口（验收清单 C2.6）。
+describe('AppLayout：dock 搜索聚焦顶栏输入框', () => {
+  it('点 dock「搜索」→ activeElement 进入「搜索文件」输入框', async () => {
+    renderWithProviders(
+      <Routes>
+        <Route path="/files" element={<AppLayout />} />
+      </Routes>,
+    )
+    const box = await screen.findByRole('searchbox', { name: '搜索文件' })
+    expect(document.activeElement).not.toBe(box)
+    await userEvent.click(screen.getByRole('button', { name: '搜索' }))
+    expect(document.activeElement).toBe(box)
   })
 })
