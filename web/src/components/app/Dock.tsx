@@ -4,7 +4,7 @@
 // 无法内嵌 DropdownMenu；故「用户」做 dock 同栏相邻控件（同一玻璃条内、分隔线隔开），
 // 视觉分组不变。TODO(Task 13 swap)：registry 源码恢复后评估把用户项收回 dock 内部。
 // DockActions 由 AppLayout 注入（Task 8 实装 onUpload；Task 9 实装 onNewFolder=新建目录 modal；
-// 搜索命令面板仍 noop，Task 13 接线）。
+// T13b 修复轮 1 实装 onSearch=聚焦 TopBar 搜索输入框，见下方「注入点现状」；命令面板 UI 仍顺延·待换源，验收清单 C2.6）。
 import { Command, FolderPlus, Home, LogOut, SunMoon, Trash2, Upload } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { GlassDock, type GlassDockItem } from '@/components/glinui/components/glass-dock'

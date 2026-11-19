@@ -18,9 +18,13 @@ export const navTrailKey = (folderId: number) => ['navTrail', folderId] as const
 const foldersKey = (parentId: number) => ['folders', parentId] as const
 
 const TRAIL_STALE_TIME = 5 * 60 * 1000
-// T13 carry #17（Task 9 minor ⑯）已知窗口：rename 后各级 navTrail 缓存旧名最长滞留 60s——
-// ['navTrail'] 族失效（actions.ts）只标 stale，TopBar trail 查询靠 refetchInterval=60_000 周期重验自愈
-// （staleTime 0 设计，见 TopBar.tsx 修复轮 1 注释）；期间面包屑可能显旧名，非缺陷、为自愈上限。
+// T13 carry #17（Task 9 minor ⑯）+ 终评 Issue #6（行为 ACCEPTED，注释精确化）：
+// refetchInterval=60_000（staleTime 0，见 TopBar.tsx 修复轮 1 注释）只自愈**降级链**——
+// name='' 被 isUsableTrail 拒绝 → queryFn 重跑 BFS 补名，最长 60s。
+// rename 后的旧名链各项 name 非空、fast-path 直返，60s 重验对它**无效**（族失效只标 stale，
+// stale 重验仍命中旧名缓存）。改名陈旧的实际界是：① 导航 setTrail 覆盖——进入被改名目录时以
+// 行数据真实名重写该键（含前缀回填）；② gcTime（默认 5 min）——trail 查询卸载且无观察者
+// 满 5 min 后条目回收，下次冷查询走 BFS 取新名。期间面包屑可能显旧名，非缺陷、为自愈上限。
 
 export function rootCrumb(): Crumb {
   return { id: ROOT_FOLDER_ID, name: ROOT_LABEL }

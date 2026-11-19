@@ -25,7 +25,7 @@ export interface RowContextMenuProps {
   row: FileRow | null
   pos: { x: number; y: number } | null
   onClose(): void
-  /** Task 10 预览接线点，FilesPage 当前注入 noop。 */
+  /** 预览（Task 10 已接线：FilesPage openPreview——双击/右键/键盘三路同源汇入 PreviewSheet）。 */
   onPreview(row: FileRow): void
   onDownload(row: FileRow): void
   onRename(row: FileRow): void

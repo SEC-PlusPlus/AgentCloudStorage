@@ -20,9 +20,10 @@
 
 ## 2. 命名
 
-- 组件 PascalCase（`UploadQueuePanel`）；文件一律 kebab-case（`upload-queue-panel.tsx`）。
-- 自定义 hook `use` 前缀（`useFileList`），文件名同 hook 名。
+- 组件文件 PascalCase、与组件同名（`LoginForm.tsx` → `LoginForm`）；自定义 hook 文件 camelCase `use` 前缀、文件名同 hook 名（`useFileRows.ts`、`useUploadManager.ts`）；纯逻辑/数据模块小写 kebab（`crumbs.ts`、`actions.ts`、`qa-state.ts`、`preview-kind.ts`）。
+- 测试与被测文件邻置 `*.test.ts(x)`，命名对应被测件：同名直缀（`useFileRows.test.ts`）或组件名 kebab 化/流程场景名（`files-page.test.tsx`、`login-flow.test.tsx`）。
 - 事件处理 props 用 `onX` / `handleX` 对；布尔 props 肯定式（`disabled` 而非 `notEnabled`）。
+- **修订（Task 14-final-fixes / 终评修波，2026-11-19）**：原句「文件一律 kebab-case（`upload-queue-panel.tsx`）」与仓库既成且 tsc 校验的实际（PascalCase 组件件 / use 前缀 hook 件）不符，上文按现状钉定规则文本；不回迁改名（零行为变更原则）。
 
 ## 3. TypeScript
 
@@ -39,7 +40,7 @@
 
 ## 5. 状态
 
-- 服务端数据只走 TanStack Query。key 规范（spec §6）：`['files',folderId,page]`、`['folders',parentId]`、`['trash',page]`、`['search',q,page]`、`['usage']`、`['crumbs',folderId]`。
+- 服务端数据只走 TanStack Query。key 规范（spec §6）：`['files',folderId,page]`、`['folders',parentId]`、`['trash',page]`、`['search',q,page]`、`['usage']`、`['navTrail',folderId]`。
 - mutation 成功 → invalidate 相关 key（源目录、目标目录、面包屑、用量四者，见 spec §6 末「TanStack Query key」段；T13 carry #1：原引「Review Focus 4」为计划侧文档，规范正文改指 spec 锚点）+ sonner toast。
 - 只有跨组件 UI 状态与服务端不承载的会话才进 zustand。
 - 会话兼容旧版：sessionStorage `acs.access-token` / `acs.expires-at` / `acs.user`；localStorage `acs.multipart.<uid>`。
