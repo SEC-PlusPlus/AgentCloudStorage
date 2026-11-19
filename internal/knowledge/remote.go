@@ -57,15 +57,25 @@ type RemoteAnswerer struct {
 	baseURL string
 	apiKey  string
 	client  *http.Client
+	// streamClient 为流式路径专用（review round-1 controller 裁定）：
+	// http.Client.Timeout 覆盖【整个交换含 body 读】，复用一元档超时客户端会把
+	// 合法长流在超时点掐死（浏览器只收到带 [DONE] 的截断流且无告警信号）。
+	streamClient *http.Client
 }
 
-// NewRemoteAnswerer 构造远端 Answerer；timeout 同时作为 http.Client.Timeout
-// （transport 层超时，含超时映射为 ErrAgentUnavailable，见 spec §5）。
+// NewRemoteAnswerer 构造远端 Answerer；timeout 仅作为一元档 http.Client.Timeout
+// （transport 层超时，含超时映射为 ErrAgentUnavailable，见 spec §5）；
+// 流式档 stream client has no overall timeout by controller ruling; ctx +
+// Python-side LLM_TIMEOUT bound the exchange（浏览器断连经请求 ctx 取消传导，
+// 首字节前失败仍由 agentStatusError 共享映射表兜底；
+// 残余"上游卡流而浏览器仍挂着"为裁定明确接受项，不加 watchdog）。
 func NewRemoteAnswerer(baseURL, apiKey string, timeout time.Duration) *RemoteAnswerer {
 	return &RemoteAnswerer{
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		client:  &http.Client{Timeout: timeout},
+		// Transport 取默认（nil→http.DefaultTransport），与一元档连接池语义一致。
+		streamClient: &http.Client{Timeout: 0},
 	}
 }
 
@@ -147,7 +157,8 @@ func (a *RemoteAnswerer) StreamAnswer(ctx context.Context, question, source stri
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+a.apiKey)
 
-	resp, err := a.client.Do(req)
+	// 专用无整体超时客户端（裁定）：长流合法性优先；取消纪律仍由 ctx 驱动。
+	resp, err := a.streamClient.Do(req)
 	if err != nil {
 		// 与 Answer 同一 ctx 契约：调用方 ctx 已死 → 裸返回 ctx.Err()（Task 9 回落门依赖）。
 		if ctxErr := ctx.Err(); ctxErr != nil {

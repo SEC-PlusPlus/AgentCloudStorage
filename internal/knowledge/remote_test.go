@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -416,6 +417,41 @@ func TestRemoteStreamAnswerErrorFrameWarnsAndClosesWithoutDelta(t *testing.T) {
 	warns := warnRecords(capture)
 	if len(warns) != 1 {
 		t.Fatalf("warn records = %d, want exactly 1 (%v)", len(warns), capture.records)
+	}
+}
+
+// TestRemoteStreamAnswerTrickleSurvivesShortUnaryTimeout 钉死 controller 裁定：
+// 流式路径走独立 streamClient（Timeout=0），NewRemoteAnswerer 的一元档超时
+// 绝不得掐死合法长流。修复前（StreamAnswer 共用 a.client）本测试必挂：30ms
+// client.Timeout 覆盖整个交换含 body 读 → ~1-2 帧后被掐、通道提前 close。
+func TestRemoteStreamAnswerTrickleSurvivesShortUnaryTimeout(t *testing.T) {
+	const trickle = 20 * time.Millisecond
+	want := make([]string, 10)
+	for i := range want {
+		want[i] = fmt.Sprintf("断%d", i)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		for i := range 10 {
+			w.Write([]byte(sseDeltaFrame(fmt.Sprintf("断%d", i))))
+			w.(http.Flusher).Flush()
+			time.Sleep(trickle)
+		}
+		w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	// 一元档超时 30ms：整个慢流（~200ms）早于此预算，唯有 streamClient 免疫。
+	a := NewRemoteAnswerer(srv.URL, "k", 30*time.Millisecond)
+	deltas, err := a.StreamAnswer(context.Background(), "q", "s")
+	if err != nil {
+		t.Fatalf("StreamAnswer() sync error = %v", err)
+	}
+	got := drainStreamWithTimeout(t, deltas, 5*time.Second)
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("deltas = %q, want all 10 trickle frames + clean [DONE]-terminated close (client.Timeout 掐流=裁定违规)", got)
 	}
 }
 
