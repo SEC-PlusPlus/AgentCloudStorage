@@ -1,8 +1,13 @@
-"""Task 5 skeleton: healthz is open, protected routes demand the exact bearer token,
-and the llm_timeout default is pinned at 45s (timeout-chain invariant)."""
+"""Task 5 skeleton + Task 6 route: healthz is open, /v1/ask demands the exact
+bearer token, and the llm_timeout default is pinned at 45s (timeout-chain
+invariant). The Task 5 `/_auth_probe` route is gone; these auth regressions now
+run against the real protected endpoint (the exact-token *passes* branch is
+covered by tests/test_ask.py::test_ask_success_and_payload_shape)."""
 from app.settings import Settings
 
 from tests.conftest import FAKE_TOKEN
+
+ASK_BODY = {"question": "q", "source": "s"}
 
 
 def test_healthz_open(client) -> None:
@@ -12,14 +17,13 @@ def test_healthz_open(client) -> None:
 
 
 def test_protected_requires_exact_bearer(client) -> None:
-    # missing header -> 401
-    assert client.get("/_auth_probe").status_code == 401
+    # missing header -> 401 (rejected before the LLM slot is ever touched)
+    assert client.post("/v1/ask", json=ASK_BODY).status_code == 401
     # wrong token -> 401
-    r = client.get("/_auth_probe", headers={"Authorization": "Bearer not-the-token"})
+    r = client.post(
+        "/v1/ask", headers={"Authorization": "Bearer not-the-token"}, json=ASK_BODY
+    )
     assert r.status_code == 401
-    # exact token -> passes
-    r = client.get("/_auth_probe", headers={"Authorization": f"Bearer {FAKE_TOKEN}"})
-    assert r.status_code == 200
 
 
 def test_non_ascii_bearer_header_is_401_not_500(client) -> None:
@@ -27,7 +31,7 @@ def test_non_ascii_bearer_header_is_401_not_500(client) -> None:
     # headers latin-1, so byte >= 0x80 arrives as a non-ASCII str and the old
     # hmac.compare_digest(str, str) raised TypeError -> 500. Byte-wise compare makes
     # every wrong token, weird or not, a 401.
-    r = client.get("/_auth_probe", headers={"Authorization": b"Bearer caf\xc3\xa9"})
+    r = client.post("/v1/ask", headers={"Authorization": b"Bearer caf\xc3\xa9"}, json=ASK_BODY)
     assert r.status_code == 401
 
 
