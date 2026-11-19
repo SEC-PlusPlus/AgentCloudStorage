@@ -80,19 +80,34 @@ func main() {
 		folderService,
 	)
 	fileHandler := httpapi.NewFileHandler(fileService)
-	if strings.TrimSpace(cfg.AI.BaseURL) == "" || strings.TrimSpace(cfg.AI.Model) == "" || strings.TrimSpace(cfg.AI.APIKey) == "" {
-		log.Fatal("AI 配置不完整：需要 ai.base_url、ai.model 和 ai.api_key（建议通过 AI_API_KEY 环境变量提供）")
+
+	// Task 9 将加入 composite 降级层：届时只需在 if/else 之外组合 remote+local，
+	// 两个分支的构造点保持不变。
+	var answerer knowledge.Answerer
+	if strings.TrimSpace(cfg.Agent.BaseURL) != "" {
+		// remote.go 逐字拼接 baseURL+"/v1/ask"，故在此规范化尾部斜杠（controller ruling）。
+		answerer = knowledge.NewRemoteAnswerer(
+			strings.TrimRight(cfg.Agent.BaseURL, "/"),
+			cfg.Agent.APIKey,
+			cfg.Agent.Timeout,
+		)
+	} else {
+		// 原 AI 必填校验与 chatModel 构造整体移入此分支。
+		if strings.TrimSpace(cfg.AI.BaseURL) == "" || strings.TrimSpace(cfg.AI.Model) == "" || strings.TrimSpace(cfg.AI.APIKey) == "" {
+			log.Fatal("AI 配置不完整：需要 ai.base_url、ai.model 和 ai.api_key（建议通过 AI_API_KEY 环境变量提供）")
+		}
+		chatModel, err := openai.NewChatModel(context.Background(), &openai.ChatModelConfig{
+			BaseURL: cfg.AI.BaseURL,
+			Model:   cfg.AI.Model,
+			APIKey:  cfg.AI.APIKey,
+			Timeout: 120 * time.Second,
+		})
+		if err != nil {
+			log.Fatal("创建 AI 模型失败:", err)
+		}
+		answerer = knowledge.NewLocalAnswerer(chatModel)
 	}
-	chatModel, err := openai.NewChatModel(context.Background(), &openai.ChatModelConfig{
-		BaseURL: cfg.AI.BaseURL,
-		Model:   cfg.AI.Model,
-		APIKey:  cfg.AI.APIKey,
-		Timeout: 120 * time.Second,
-	})
-	if err != nil {
-		log.Fatal("创建 AI 模型失败:", err)
-	}
-	knowledgeHandler := httpapi.NewKnowledgeHandler(fileService, knowledge.NewLocalAnswerer(chatModel))
+	knowledgeHandler := httpapi.NewKnowledgeHandler(fileService, answerer)
 
 	uploadRepository := upload.NewGORMRepository(db)
 	uploadService := upload.NewService(objectStorage, uploadRepository, folderService)
