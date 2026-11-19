@@ -22,6 +22,15 @@ def test_protected_requires_exact_bearer(client) -> None:
     assert r.status_code == 200
 
 
+def test_non_ascii_bearer_header_is_401_not_500(client) -> None:
+    # Send raw bytes (httpx refuses non-ASCII str header values): Starlette decodes
+    # headers latin-1, so byte >= 0x80 arrives as a non-ASCII str and the old
+    # hmac.compare_digest(str, str) raised TypeError -> 500. Byte-wise compare makes
+    # every wrong token, weird or not, a 401.
+    r = client.get("/_auth_probe", headers={"Authorization": b"Bearer caf\xc3\xa9"})
+    assert r.status_code == 401
+
+
 def test_llm_timeout_default_is_45() -> None:
     # Review Focus 1 (timeout inversion): the LLM timeout must stay strictly below the
     # Go-side agent.timeout default of 60s, so Python answers 504 before Go hangs up on
