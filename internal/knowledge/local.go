@@ -2,7 +2,10 @@ package knowledge
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"strings"
 
 	"github.com/cloudwego/eino/components/model"
@@ -23,8 +26,10 @@ func NewLocalAnswerer(chatModel model.BaseChatModel) *LocalAnswerer {
 	return &LocalAnswerer{chatModel: chatModel}
 }
 
-func (a *LocalAnswerer) Answer(ctx context.Context, question, source string) (string, error) {
-	messages := []*schema.Message{
+// askMessages 组装问答消息（system 提示词 + 用户段落/问题）。
+// Answer 与 StreamAnswer 共用，保证两档 prompt 逐字一致（spec R1）。
+func askMessages(question, source string) []*schema.Message {
+	return []*schema.Message{
 		{
 			Role:    schema.System,
 			Content: localSystemPrompt,
@@ -35,8 +40,10 @@ func (a *LocalAnswerer) Answer(ctx context.Context, question, source string) (st
 				"\n问题：" + question,
 		},
 	}
+}
 
-	reply, err := a.chatModel.Generate(ctx, messages)
+func (a *LocalAnswerer) Answer(ctx context.Context, question, source string) (string, error) {
+	reply, err := a.chatModel.Generate(ctx, askMessages(question, source))
 	if err != nil {
 		return "", fmt.Errorf("generate answer: %w (%w)", ErrUpstreamLLM, err)
 	}
@@ -45,4 +52,43 @@ func (a *LocalAnswerer) Answer(ctx context.Context, question, source string) (st
 	}
 
 	return strings.TrimSpace(reply.Content), nil
+}
+
+// StreamAnswer 调 chatModel.Stream 并把 StreamReader 逐块排入通道（Task 11）。
+// 开流失败（Stream 返回错误、ctx 已死）同步上抛，哨兵与 Answer 同族（ErrUpstreamLLM）；
+// 开流成功后一切终结（EOF/Recv 报错/取消）只 close 通道，错误经 slog 记录。
+func (a *LocalAnswerer) StreamAnswer(ctx context.Context, question, source string) (<-chan string, error) {
+	reader, err := a.chatModel.Stream(ctx, askMessages(question, source))
+	if err != nil {
+		return nil, fmt.Errorf("stream answer: %w (%w)", ErrUpstreamLLM, err)
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		reader.Close()
+		return nil, ctxErr
+	}
+
+	out := make(chan string, streamChanBuffer)
+	go func() {
+		defer close(out)
+		defer reader.Close() // 排空至 EOF 后关闭；异常路径同样兜底释放
+		for {
+			msg, err := reader.Recv()
+			if err != nil {
+				// io.EOF=正常收尾；其余（含 ctx 打断）记 Warn 后一律 close 了事。
+				if !errors.Is(err, io.EOF) {
+					slog.Warn("local answer stream aborted", "error", err)
+				}
+				return
+			}
+			if msg == nil || msg.Content == "" {
+				continue // 角色增量/用量尾块等空 content：无信息量，跳过
+			}
+			select {
+			case out <- msg.Content:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
 }

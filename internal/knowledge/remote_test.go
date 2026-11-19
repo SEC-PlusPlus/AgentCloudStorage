@@ -166,3 +166,283 @@ func TestRemoteAnswerTransportError(t *testing.T) {
 		t.Fatalf("errors.Is(err, ErrAgentUnavailable) = false, err = %v", err)
 	}
 }
+
+// sseDeltaFrame 按 Task 10 冻结的线上格式拼一帧：data: {"delta": "..."}\n\n。
+func sseDeltaFrame(delta string) string {
+	payload, err := json.Marshal(map[string]string{"delta": delta})
+	if err != nil {
+		panic(err) // 测试构造器：字符串不可能编码失败
+	}
+	return "data: " + string(payload) + "\n\n"
+}
+
+// drainStreamWithTimeout 收尽通道直到 close；超时视为"通道未关闭"失败（Task 11 契约：一切终结皆 close）。
+func drainStreamWithTimeout(t *testing.T, deltas <-chan string, timeout time.Duration) []string {
+	t.Helper()
+	var got []string
+	deadline := time.After(timeout)
+	for {
+		select {
+		case d, ok := <-deltas:
+			if !ok {
+				return got
+			}
+			got = append(got, d)
+		case <-deadline:
+			t.Fatalf("stream did not close within %v (received %d delta(s) so far)", timeout, len(got))
+		}
+	}
+}
+
+func TestRemoteStreamAnswerReplaysDeltasUntilDone(t *testing.T) {
+	capture := swapSlogDefault(t)
+
+	var (
+		gotPath    string
+		gotAuth    string
+		gotCT      string
+		gotPayload map[string]any
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotCT = r.Header.Get("Content-Type")
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &gotPayload); err != nil {
+			t.Errorf("stream request body not JSON: %v (%q)", err, body)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		// 冻结格式：三帧 delta + [DONE]（Task 10 wire facts）。
+		w.Write([]byte(sseDeltaFrame("第一段")))
+		w.Write([]byte(sseDeltaFrame("第二段")))
+		w.Write([]byte(sseDeltaFrame("第三段")))
+		w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	a := NewRemoteAnswerer(srv.URL, "test-key", 5*time.Second)
+	deltas, err := a.StreamAnswer(context.Background(), "问了什么", "[1] 段落")
+	if err != nil {
+		t.Fatalf("StreamAnswer() sync error = %v", err)
+	}
+
+	got := drainStreamWithTimeout(t, deltas, 5*time.Second)
+	if want := []string{"第一段", "第二段", "第三段"}; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("deltas = %q, want %q", got, want)
+	}
+	if gotPath != "/v1/ask/stream" {
+		t.Errorf("path = %q, want %q", gotPath, "/v1/ask/stream")
+	}
+	if gotAuth != "Bearer test-key" {
+		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer test-key")
+	}
+	if gotCT != "application/json" {
+		t.Errorf("Content-Type = %q, want %q", gotCT, "application/json")
+	}
+	if gotPayload["question"] != "问了什么" || gotPayload["source"] != "[1] 段落" {
+		t.Errorf("stream payload = %v, want {question, source}", gotPayload)
+	}
+	if len(warnRecords(capture)) != 0 {
+		t.Errorf("[DONE] 正常收尾不该记任何 Warn，got %v", capture.records)
+	}
+}
+
+func TestRemoteStreamAnswerPreStartUnauthorizedIsSyncError(t *testing.T) {
+	// 开流前 401 → 同步返回 Task 3 同一张表的哨兵（Answer 与 StreamAnswer 共用 agentStatusError），
+	// 且不得留下通道/goroutine。
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, `{"detail":"bad key"}`)
+	}))
+	defer srv.Close()
+
+	a := NewRemoteAnswerer(srv.URL, "k", 5*time.Second)
+	deltas, err := a.StreamAnswer(context.Background(), "q", "s")
+	if !errors.Is(err, ErrAgentUnauthorized) {
+		t.Fatalf("errors.Is(err, ErrAgentUnauthorized) = false, err = %v", err)
+	}
+	if deltas != nil {
+		t.Errorf("deltas != nil, want nil channel on pre-stream failure")
+	}
+
+	for _, tc := range []struct {
+		status int
+		want   error
+	}{
+		{http.StatusServiceUnavailable, ErrAgentUnavailable}, // default 行：非约定状态 → Unavailable
+		{http.StatusGatewayTimeout, ErrUpstreamLLM},          // 与 Answer 表逐字一致
+	} {
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(tc.status)
+		}))
+		an := NewRemoteAnswerer(s.URL, "k", 5*time.Second)
+		_, err := an.StreamAnswer(context.Background(), "q", "s")
+		s.Close()
+		if !errors.Is(err, tc.want) {
+			t.Errorf("status %d: errors.Is(err, %v) = false, err = %v", tc.status, tc.want, err)
+		}
+	}
+}
+
+func TestRemoteStreamAnswerCtxCancelMidStreamClosesChannel(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(sseDeltaFrame("第一段")))
+		w.(http.Flusher).Flush()
+		// 之后挂起：模拟 Python 侧慢流。第二条 delta 永远不来，靠 ctx 取消收尾。
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer func() { close(release); srv.Close() }()
+
+	a := NewRemoteAnswerer(srv.URL, "k", 30*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	deltas, err := a.StreamAnswer(ctx, "q", "s")
+	if err != nil {
+		t.Fatalf("StreamAnswer() sync error = %v", err)
+	}
+
+	select {
+	case d, ok := <-deltas:
+		if !ok || d != "第一段" {
+			t.Fatalf("first delta = (%q, ok=%v), want 第一段", d, ok)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no first delta within 5s")
+	}
+
+	cancel()
+	// 契约：ctx 取消 → 生产者关 resp.Body 并 close 通道，绝无 goroutine 泄漏。
+	drainStreamWithTimeout(t, deltas, 5*time.Second)
+}
+
+func TestRemoteStreamAnswerOversizedFrameClosesNoPanic(t *testing.T) {
+	// 2MB 单帧 > 64KB/行 Scanner 上限：记 Warn 关流，进程无恙（brief Step 1 / Review Focus 5）。
+	capture := swapSlogDefault(t)
+
+	bigFrame := `data: {"delta":"` + strings.Repeat("x", 2<<20) + `"}` + "\n\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(sseDeltaFrame("第一段")))
+		w.(http.Flusher).Flush()
+		w.Write([]byte(bigFrame))
+		w.(http.Flusher).Flush()
+		w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	a := NewRemoteAnswerer(srv.URL, "k", 10*time.Second)
+	deltas, err := a.StreamAnswer(context.Background(), "q", "s")
+	if err != nil {
+		t.Fatalf("StreamAnswer() sync error = %v", err)
+	}
+	got := drainStreamWithTimeout(t, deltas, 10*time.Second)
+	if len(got) > 1 || (len(got) == 1 && got[0] != "第一段") {
+		t.Errorf("deltas = %q, want at most the small frame preceding the oversized one", got)
+	}
+	if len(warnRecords(capture)) == 0 {
+		t.Errorf("超限帧必须至少记一条 Warn，got %v", capture.records)
+	}
+}
+
+func TestRemoteStreamAnswerTotalByteCapStopsStream(t *testing.T) {
+	// 累计字节 >4MB（Review Focus 5）：超限记 Warn、关通道，后续帧不再送出。
+	capture := swapSlogDefault(t)
+
+	line := sseDeltaFrame(strings.Repeat("a", 60_000)) // ~60KB < 64KB 行上限，走累计计数分支
+	frames := 128                                      // ~7.8MB 总量 > 4MiB cap
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		for range frames {
+			w.Write([]byte(line))
+		}
+		w.(http.Flusher).Flush()
+		w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	a := NewRemoteAnswerer(srv.URL, "k", 10*time.Second)
+	deltas, err := a.StreamAnswer(context.Background(), "q", "s")
+	if err != nil {
+		t.Fatalf("StreamAnswer() sync error = %v", err)
+	}
+	got := drainStreamWithTimeout(t, deltas, 10*time.Second)
+	if len(got) == 0 {
+		t.Fatal("cap 之前应有 delta 送达")
+	}
+	if len(got) >= frames {
+		t.Errorf("received all %d frames, want cap to stop stream earlier", frames)
+	}
+	if received := len(got) * 60_000; received > (4<<20)+(64<<10) {
+		t.Errorf("received ~%d bytes of deltas, want bounded near the 4MiB cap", received)
+	}
+	if len(warnRecords(capture)) == 0 {
+		t.Errorf("超总字节上限必须记 Warn，got %v", capture.records)
+	}
+}
+
+func TestRemoteStreamAnswerErrorFrameWarnsAndClosesWithoutDelta(t *testing.T) {
+	// 冻结格式：{"error"} 帧后 Python 直接关闭、不发 [DONE]。Go 侧：Warn + 关通道，
+	// 错误帧绝不变成 delta 下发（Task 11 契约：不发明错误帧）。
+	capture := swapSlogDefault(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(sseDeltaFrame("第一段")))
+		w.Write([]byte(sseDeltaFrame("第二段")))
+		w.Write([]byte("data: " + `{"error": "upstream llm failure"}` + "\n\n"))
+		w.(http.Flusher).Flush()
+	}))
+	defer srv.Close()
+
+	a := NewRemoteAnswerer(srv.URL, "k", 10*time.Second)
+	deltas, err := a.StreamAnswer(context.Background(), "q", "s")
+	if err != nil {
+		t.Fatalf("StreamAnswer() sync error = %v", err)
+	}
+	got := drainStreamWithTimeout(t, deltas, 5*time.Second)
+	if want := []string{"第一段", "第二段"}; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("deltas = %q, want %q (error frame must not be forwarded as delta)", got, want)
+	}
+	warns := warnRecords(capture)
+	if len(warns) != 1 {
+		t.Fatalf("warn records = %d, want exactly 1 (%v)", len(warns), capture.records)
+	}
+}
+
+func TestRemoteStreamAnswerSkipsMalformedFrames(t *testing.T) {
+	// 宽容解析：坏 JSON / 无 data: 前缀的行记 Warn 跳过，绝不拖垮整个流。
+	capture := swapSlogDefault(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("this line has no data prefix\n\n"))
+		w.Write([]byte("data: {not valid json\n\n"))
+		w.Write([]byte(sseDeltaFrame("好帧")))
+		w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	a := NewRemoteAnswerer(srv.URL, "k", 5*time.Second)
+	deltas, err := a.StreamAnswer(context.Background(), "q", "s")
+	if err != nil {
+		t.Fatalf("StreamAnswer() sync error = %v", err)
+	}
+	got := drainStreamWithTimeout(t, deltas, 5*time.Second)
+	if len(got) != 1 || got[0] != "好帧" {
+		t.Errorf("deltas = %q, want [好帧]", got)
+	}
+	if len(warnRecords(capture)) < 2 {
+		t.Errorf("两条畸形帧应各记 Warn，got %v", capture.records)
+	}
+}

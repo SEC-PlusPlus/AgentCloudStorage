@@ -5,18 +5,24 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 )
 
-// fakeChatModel 实现 model.BaseChatModel 的完整方法集（以 eino 当前定义为准），
-// 仅用于捕获 Generate 收到的 messages；本任务的被测代码不应调用 Stream。
+// fakeChatModel 实现 model.BaseChatModel 的完整方法集（以 eino 当前定义为准）。
+// Task 11：Stream 用 schema.Pipe 回放 streamChunks（EOF 由 sw.Close 触发），
+// streamErr 模拟开流即败；streamCaptured 钉死消息组装。
 type fakeChatModel struct {
-	generateCalls int
-	captured      []*schema.Message
-	reply         *schema.Message
-	err           error
+	generateCalls  int
+	captured       []*schema.Message
+	reply          *schema.Message
+	err            error
+	streamCalls    int
+	streamCaptured []*schema.Message
+	streamChunks   []*schema.Message
+	streamErr      error
 }
 
 func (f *fakeChatModel) Generate(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.Message, error) {
@@ -29,7 +35,21 @@ func (f *fakeChatModel) Generate(ctx context.Context, input []*schema.Message, o
 }
 
 func (f *fakeChatModel) Stream(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
-	return nil, errors.New("Stream not implemented in fake")
+	f.streamCalls++
+	f.streamCaptured = input
+	if f.streamErr != nil {
+		return nil, f.streamErr
+	}
+	sr, sw := schema.Pipe[*schema.Message](len(f.streamChunks) + 1)
+	go func() {
+		defer sw.Close()
+		for _, chunk := range f.streamChunks {
+			if sw.Send(chunk, nil) {
+				return // reader 已被关闭
+			}
+		}
+	}()
+	return sr, nil
 }
 
 const wantSystemPrompt = "你是文件问答助手。只能依据用户提供的文件段落回答，" +
@@ -76,6 +96,47 @@ func TestLocalAnswererWrapsGenerateError(t *testing.T) {
 	}
 	if !errors.Is(err, boom) {
 		t.Errorf("original Generate error not preserved in chain: %v", err)
+	}
+}
+
+func TestLocalAnswererStreamAnswerDrainsChunks(t *testing.T) {
+	fake := &fakeChatModel{streamChunks: []*schema.Message{
+		{Content: "第一段"},
+		{Content: ""}, // 空 content 块（角色增量等）应被跳过
+		{Content: "第二段"},
+	}}
+	a := NewLocalAnswerer(fake)
+
+	deltas, err := a.StreamAnswer(context.Background(), "问题", "段落")
+	if err != nil {
+		t.Fatalf("StreamAnswer() sync error = %v", err)
+	}
+	got := drainStreamWithTimeout(t, deltas, 5*time.Second) // 同包 remote_test：close 前超时即失败
+	if strings.Join(got, "|") != "第一段|第二段" {
+		t.Errorf("deltas = %q, want [第一段 第二段] with empty chunk skipped", got)
+	}
+	if fake.streamCalls != 1 {
+		t.Errorf("Stream calls = %d, want 1", fake.streamCalls)
+	}
+	if len(fake.streamCaptured) != 2 || fake.streamCaptured[1].Content != "文件段落：\n段落\n问题：问题" {
+		t.Errorf("stream messages = %v, want same assembly as Answer", fake.streamCaptured)
+	}
+}
+
+func TestLocalAnswererStreamAnswerWrapsSyncStreamError(t *testing.T) {
+	boom := errors.New("stream boom")
+	fake := &fakeChatModel{streamErr: boom}
+	a := NewLocalAnswerer(fake)
+
+	deltas, err := a.StreamAnswer(context.Background(), "q", "s")
+	if !errors.Is(err, ErrUpstreamLLM) {
+		t.Fatalf("errors.Is(err, ErrUpstreamLLM) = false, err = %v", err)
+	}
+	if !errors.Is(err, boom) {
+		t.Errorf("original Stream error not preserved: %v", err)
+	}
+	if deltas != nil {
+		t.Errorf("deltas != nil, want nil channel on pre-stream failure")
 	}
 }
 

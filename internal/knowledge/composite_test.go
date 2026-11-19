@@ -14,10 +14,14 @@ import (
 
 // fakeTier 是 composite_test 专用的包内桩 Answerer（与 local_test 的 fakeChatModel 不同层：
 // 这里 fake 的是 Answerer 接口本身，按档位记录调用次数）。
+// Task 11：补 StreamAnswer——streamDeltas 同步灌入已关闭通道；streamErr 为开流前同步错误。
 type fakeTier struct {
-	answer string
-	err    error
-	calls  int
+	answer       string
+	err          error
+	calls        int
+	streamDeltas []string
+	streamErr    error
+	streamCalls  int
 }
 
 func (f *fakeTier) Answer(ctx context.Context, question, source string) (string, error) {
@@ -26,6 +30,19 @@ func (f *fakeTier) Answer(ctx context.Context, question, source string) (string,
 		return "", f.err
 	}
 	return f.answer, nil
+}
+
+func (f *fakeTier) StreamAnswer(ctx context.Context, question, source string) (<-chan string, error) {
+	f.streamCalls++
+	if f.streamErr != nil {
+		return nil, f.streamErr
+	}
+	out := make(chan string, len(f.streamDeltas)+1)
+	for _, d := range f.streamDeltas {
+		out <- d
+	}
+	close(out)
+	return out, nil
 }
 
 // recordCapture 收集 slog 默认 logger 的记录，用于钉死"回落必须 slog.Warn"。
@@ -220,6 +237,107 @@ func TestCompositeAnswererNilFallbackPassThrough(t *testing.T) {
 	answer, err := composite.Answer(context.Background(), "问题", "段落")
 	if answer != "答案" || err != nil {
 		t.Errorf("Answer() = (%q, %v), want (%q, nil)", answer, err, "答案")
+	}
+}
+
+// ---- Task 11：CompositeAnswerer.StreamAnswer（开流前同步错误才回落；回落答案=单个 delta）----
+
+func TestCompositeStreamPrimarySuccessPassesChannelThrough(t *testing.T) {
+	capture := swapSlogDefault(t)
+
+	primary := &fakeTier{streamDeltas: []string{"第一段", "第二段"}}
+	fallback := &fakeTier{answer: "本地答案"}
+	composite := NewCompositeAnswerer(primary, fallback)
+
+	deltas, err := composite.StreamAnswer(context.Background(), "问题", "段落")
+	if err != nil {
+		t.Fatalf("StreamAnswer() sync error = %v", err)
+	}
+	got := drainStreamWithTimeout(t, deltas, 2*time.Second)
+	if strings.Join(got, "|") != "第一段|第二段" {
+		t.Errorf("deltas = %q, want primary passthrough", got)
+	}
+	if fallback.calls != 0 || fallback.streamCalls != 0 {
+		t.Errorf("fallback must stay untouched on primary success: Answer %d, StreamAnswer %d", fallback.calls, fallback.streamCalls)
+	}
+	if len(warnRecords(capture)) != 0 {
+		t.Errorf("unexpected warn records: %v", capture.records)
+	}
+}
+
+func TestCompositeStreamFallbackAsSingleDelta(t *testing.T) {
+	capture := swapSlogDefault(t)
+
+	primaryErr := fmt.Errorf("call agent service: %w (%w)", ErrAgentUnavailable, errors.New("dial refused"))
+	primary := &fakeTier{streamErr: primaryErr}
+	fallback := &fakeTier{answer: "本地兜底答案"}
+	composite := NewCompositeAnswerer(primary, fallback)
+
+	deltas, err := composite.StreamAnswer(context.Background(), "问题", "段落")
+	if err != nil {
+		t.Fatalf("fallback-eligible sync error must yield a channel, got %v", err)
+	}
+	got := drainStreamWithTimeout(t, deltas, 2*time.Second)
+	if len(got) != 1 || got[0] != "本地兜底答案" {
+		t.Errorf("deltas = %q, want exactly one delta %q", got, "本地兜底答案")
+	}
+	if fallback.calls != 1 {
+		t.Errorf("fallback.Answer calls = %d, want 1", fallback.calls)
+	}
+	if fallback.streamCalls != 0 {
+		t.Errorf("fallback.StreamAnswer calls = %d, want 0 (回落走整段 Answer)", fallback.streamCalls)
+	}
+	warns := warnRecords(capture)
+	if len(warns) != 1 || warns[0].Message != "agent fallback" {
+		t.Errorf("warn records = %v, want exactly one %q", warns, "agent fallback")
+	}
+}
+
+func TestCompositeStreamUnauthorizedPassesThroughWithoutFallback(t *testing.T) {
+	capture := swapSlogDefault(t)
+
+	primaryErr := fmt.Errorf("agent rejected credentials: status %d (%w)", 401, ErrAgentUnauthorized)
+	primary := &fakeTier{streamErr: primaryErr}
+	fallback := &fakeTier{answer: "本地答案"}
+	composite := NewCompositeAnswerer(primary, fallback)
+
+	deltas, err := composite.StreamAnswer(context.Background(), "问题", "段落")
+	if !errors.Is(err, ErrAgentUnauthorized) {
+		t.Fatalf("err = %v, want primary unauthorized chain", err)
+	}
+	if deltas != nil {
+		t.Errorf("deltas != nil, want nil channel on non-fallback-eligible error")
+	}
+	if fallback.calls != 0 || fallback.streamCalls != 0 {
+		t.Errorf("unauthorized must never touch fallback")
+	}
+	if len(warnRecords(capture)) != 0 {
+		t.Errorf("unexpected warn records: %v", capture.records)
+	}
+}
+
+func TestCompositeStreamNoFallbackWhenCtxCanceled(t *testing.T) {
+	capture := swapSlogDefault(t)
+
+	primaryErr := fmt.Errorf("call agent service: %w (%w)", ErrAgentUnavailable, errors.New("boom"))
+	primary := &fakeTier{streamErr: primaryErr}
+	fallback := &fakeTier{answer: "本地答案"}
+	composite := NewCompositeAnswerer(primary, fallback)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	deltas, err := composite.StreamAnswer(ctx, "问题", "段落")
+	if !errors.Is(err, ErrAgentUnavailable) {
+		t.Fatalf("err = %v, want primary error untouched", err)
+	}
+	if deltas != nil {
+		t.Errorf("deltas != nil, want nil channel when ctx already dead")
+	}
+	if fallback.calls != 0 {
+		t.Errorf("canceled ctx must never fall back (same gate as Answer)")
+	}
+	if len(warnRecords(capture)) != 0 {
+		t.Errorf("unexpected warn records: %v", capture.records)
 	}
 }
 
