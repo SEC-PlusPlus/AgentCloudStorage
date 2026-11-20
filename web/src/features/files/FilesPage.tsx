@@ -19,6 +19,9 @@
 // 面板动作全部复用本页既有 handler（openPreview/runDownload/setRenameTarget/setMoveTarget/openAsk/
 // setDeleteTargets），零第二套 mutation；「所在目录」行复用 searchSourceLabel 同函数无 BFS；
 // 关闭钮=清 selection + clearSelectionToken 递增经 FilesTable 缝双向复位 checkbox）。
+// Task 3-C（布局密度）追加：根浏览态页头与列表之间挂 RecentStrip 仪表盘带（最近添加卡片+存储环）；
+// abc-1 零新请求——数据=getQueryData 只读 ['files',0,1]/['usage'] 既有缓存（详见派生块注释）；
+// 带在场时 FilesTable 内滚扣减经新缝 listScrollOffsetPx 叠加 STRIP_HEIGHT_PX（单源组装在本页 JSX）。
 import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
@@ -43,7 +46,7 @@ import { GopherScene } from '@/components/app/GopherScene'
 import { Pagination } from '@/components/app/Pagination'
 import { folderIdFromLocation } from '@/components/app/TopBar'
 import { ApiError } from '@/api/client'
-import { deleteFolder, downloadFile, trashFile, type FileItem } from '@/api/storage'
+import { deleteFolder, downloadFile, trashFile, type FileItem, type PageResult } from '@/api/storage'
 import { isUsableTrail, navTrailKey, setTrail } from '@/features/files/crumbs'
 import { canAsk } from '@/features/qa/qa-state'
 import { QaSheet } from '@/features/qa/QaSheet'
@@ -64,7 +67,8 @@ import { RenameDialog } from './RenameDialog'
 import { RowContextMenu } from './RowContextMenu'
 import { RowToolbar } from './RowToolbar'
 import { useUploadManager } from './useUploadManager'
-import { FilesTable, searchSourceLabel } from './FilesTable'
+import { FilesTable, LIST_SCROLL_OFFSET_PX, searchSourceLabel } from './FilesTable'
+import { RecentStrip, STRIP_HEIGHT_PX, recentCards, type UsageCache } from './RecentStrip'
 import { useFileRows } from './useFileRows'
 import type { FileRow } from './useFileRows'
 
@@ -189,6 +193,24 @@ export function FilesPage() {
           { label: '移入回收站', icon: Trash2, danger: true, onClick: () => setDeleteTargets(selection) },
         ]
       : []
+
+  // Task 3-C 根目录仪表盘带（abc-1 零新请求）：两数据源均为既有缓存快照——
+  //   ['files',0,1]：useFileRows 在根第 1 页浏览态订阅的**同一 key**（服务端 created_at DESC，
+  //     recentCards 直取前 6 文件行；搜索/翻页态该 key 可能未在场 → 环独降格，**绝不回补请求**）；
+  //   ['usage']：TopBar 已订阅（60s staleTime + 窗口聚焦重取），本页只 getQueryData 读快照。
+  // getQueryData 不订阅、不发请求（TanStack 语义）；['usage'] 更新后本组件借自然重渲染追平
+  // （仪表盘带为布局层，非计量表，秒级滞后有意接受——要实时请升格为订阅，那才是新请求源）。
+  // 渲染闸：folderId===0 && !keywordMode（缓存读取先按此收口）且至少一个数据源有内容
+  //   （全缺位时不占首屏，列表回基线扣减）。
+  const recentFiles = folderId === 0 && !state.keywordMode
+    ? queryClient.getQueryData<PageResult<FileItem>>(['files', 0, 1])?.items
+    : undefined
+  const usageSnapshot = folderId === 0 && !state.keywordMode
+    ? queryClient.getQueryData<UsageCache>(['usage'])
+    : undefined
+  const stripCards = recentCards(recentFiles ?? [])
+  // 判定式=RecentStrip 内部 null 闸（双缺位不渲染）的镜像——带若实际不落 DOM，扣减也不叠加（单源一致）。
+  const showRecentStrip = stripCards.length > 0 || usageSnapshot !== undefined
 
   // 越页兜底（Important #1）：后端越页返回 200+空 items + 真实 total——空 rows≠空目录。
   // 落定后 replace 到最后一有效页（total=0 不钳位：那是真空态，Empty 负责）。
@@ -335,9 +357,15 @@ export function FilesPage() {
         <div className="flex items-start gap-3">
           {/* 主列保持原 flex-col gap-3 节奏（列表↔分页间距不随双栏化丢失；列表本体 display:contents 透明） */}
           <div className="flex min-w-0 flex-1 flex-col gap-3">
+          {/* Task 3-C：根仪表盘带——页头与列表之间、主列内（aside 之上不放：面板对齐不牵连）。
+              带在场时内滚扣减=基线+带高（两项各一数源：LIST_SCROLL_OFFSET_PX / STRIP_HEIGHT_PX）。 */}
+          {showRecentStrip ? (
+            <RecentStrip cards={stripCards} usage={usageSnapshot ?? null} onOpen={openPreview} />
+          ) : null}
           <FilesTable
             rows={state.rows}
             loading={state.isLoading}
+            listScrollOffsetPx={LIST_SCROLL_OFFSET_PX + (showRecentStrip ? STRIP_HEIGHT_PX : 0)}
             // 终评修波 3：仅搜索态注入源目录副标题（渲染期只读 ['navTrail'] 缓存快照，
             // cache-hit 链尾名 / cache-miss「目录 <id>」/ 根=「根目录」——TrashPage 原目录同纪律，无 BFS）。
             searchSourceLabel={

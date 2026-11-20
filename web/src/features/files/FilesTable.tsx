@@ -62,6 +62,12 @@ export interface FilesTableProps {
    * （Important #3 契约不回归）。
    */
   clearSelectionToken?: number
+  /**
+   * 内滚 max-h 的 vh 扣减总量（Task 3-C 接线：根仪表盘带在场时 FilesPage 传
+   * `LIST_SCROLL_OFFSET_PX + STRIP_HEIGHT_PX`——每项仍只有一个数源，禁第二套魔法数；
+   * 缺省=基线，TrashPage/非根/搜索态零变化）。
+   */
+  listScrollOffsetPx?: number
 }
 
 /** 行唯一键：folder/file 各自 id 独立序列（后端两表），需 kind 前缀防碰撞。 */
@@ -90,6 +96,10 @@ export const LIST_SCROLL_CONTAINER_CLASS = 'max-h-[var(--file-list-max-h)] overf
 export const listScrollFrameStyle = {
   '--file-list-max-h': `calc(100vh - ${LIST_SCROLL_OFFSET_PX}px)`,
 } as CSSProperties
+/** 同上但扣减总量由入参决定（Task 3-C：仪表盘带在场=基线+STRIP_HEIGHT_PX，单源组装见 FilesPage）。 */
+export const fileListFrameStyle = (offsetPx: number): CSSProperties => ({
+  '--file-list-max-h': `calc(100vh - ${offsetPx}px)`,
+} as CSSProperties)
 
 export function FilesTable({
   rows,
@@ -100,7 +110,10 @@ export function FilesTable({
   onSelectionChange = noop,
   onFolderOpen = noop,
   clearSelectionToken = 0,
+  listScrollOffsetPx = LIST_SCROLL_OFFSET_PX,
 }: FilesTableProps) {
+  // 帧样式随扣减总量变化（缺省=基线，与静态 listScrollFrameStyle 等值；TrashPage 不经本组件仍用静态件）
+  const frameStyle = fileListFrameStyle(listScrollOffsetPx)
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const selectedRef = useRef(selected)
   selectedRef.current = selected // 渲染期镜像：effects 读最新勾选而不必把 selected 拉进依赖（避免自触发）
@@ -156,7 +169,7 @@ export function FilesTable({
     return (
       <div aria-busy="true" data-testid="files-loading">
         {/* 列骨架与数据态同构（含图标列/吸顶/内滚容器类）——loading→loaded 零列宽跳动 */}
-        <div className="contents" style={listScrollFrameStyle}>
+        <div className="contents" style={frameStyle}>
           <Table variant="glass" rowDividers stickyHeader containerClassName={LIST_SCROLL_CONTAINER_CLASS}>
             <TableHeader>
               <TableRow>
@@ -185,7 +198,7 @@ export function FilesTable({
   }
 
   return (
-    <div className="contents" style={listScrollFrameStyle}>
+    <div className="contents" style={frameStyle}>
       <Table variant="glass" interactive rowDividers stickyHeader containerClassName={LIST_SCROLL_CONTAINER_CLASS}>
         <TableHeader>
           <TableRow>
