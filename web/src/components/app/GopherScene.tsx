@@ -4,8 +4,8 @@
 // 650/3900 两端透明度淡入淡出——旧 draw() 公式原样）；prefers-reduced-motion 降级=旧 syncMotion()
 // 语义逐字镜像：matchMedia 变化即「静态包位置 (350,154)/旋转 0/不透明 1，停 rAF」↔「恢复飞行动画」。
 // 无障碍（旧同）：svg aria-hidden + focusable=false（装饰性场景），figcaption 承载唯一可读文本。
-// 接入点：登录卡 footer 带（mascot PNG 保留在 header，R(T13a-22)）、files/trash 空态（Empty children）、
-// DropOverlay 角落（showCaption=false）。
+// 接入点：登录页左场景列（Task 15 分屏改版：自卡片 footer 迁出并等比放大；mascot PNG 保留在卡 header，
+// R(T13a-22) 落位随之更新）、files/trash 空态（Empty children）、DropOverlay 角落（showCaption=false）。
 import { useEffect, useRef, useState } from 'react'
 import { cn } from '@/components/glinui/lib/cn'
 

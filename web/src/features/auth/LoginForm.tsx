@@ -15,7 +15,6 @@ import { GlassCard, GlassCardContent, GlassCardFooter, GlassCardHeader } from '@
 import { Heading } from '@/components/glinui/components/heading'
 import { Input } from '@/components/glinui/components/input'
 import { Field } from '@/components/app/Field'
-import { GopherScene } from '@/components/app/GopherScene'
 import { authActions } from '@/stores/auth'
 
 export function LoginForm() {
@@ -48,7 +47,7 @@ export function LoginForm() {
   }
 
   return (
-    <GlassCard className="w-full max-w-[420px]">
+    <GlassCard data-testid="login-card" className="w-full max-w-[480px]">
       <GlassCardHeader className="flex flex-col items-center gap-2 text-center">
         <BlurFade duration={600} blur={10} yOffset={8}>
           <img
@@ -106,10 +105,9 @@ export function LoginForm() {
         </form>
       </GlassCardContent>
 
-      {/* T13 carry #22：品牌场景（旧 AuthPage StorageScene 的移植落位）=卡片下部带；
-          mascot PNG 保留在 header（R(T5-mascot) 措辞随 spec §5.1 更新，见 changelog 13a 行）。 */}
-      <GlassCardFooter className="flex flex-col items-center gap-2 pt-2 text-center">
-        <GopherScene className="max-w-[360px]" />
+      {/* Task 15 分屏改版：GopherScene 场景带已迁出卡片到 LoginRoute 左列（等比放大），
+          footer 仅留注册提示；mascot PNG 仍在 header（品牌标非场景，R(T5-mascot) 不变）。 */}
+      <GlassCardFooter className="pt-2 text-center">
         <p className="text-xs text-[var(--color-foreground)] opacity-60">注册暂未开放</p>
       </GlassCardFooter>
     </GlassCard>

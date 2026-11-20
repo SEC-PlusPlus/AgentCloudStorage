@@ -163,4 +163,23 @@ describe('登录页流程（mock login）', () => {
     expect(screen.getByAltText('土拨鼠吉祥物')).toHaveAttribute('src', '/images/cloud-gopher-pixel.png')
     expect(screen.getByText('注册暂未开放')).toBeInTheDocument()
   })
+
+  // Task 15 登录分屏：GopherScene 从卡片 footer 迁出到左侧独立场景列（DOM 结构断言，
+  // jsdom 不跑媒体查询故不断言 lg 栅格，钉「卡外/列内」拓扑 + aria-hidden 装饰语义不变）。
+  it('分屏结构：场景列（login-scene-col）存在且在 GlassCard 之外，卡片/场景双双在场，svg aria-hidden 保留', async () => {
+    await renderLoginPage()
+    const sceneCol = screen.getByTestId('login-scene-col')
+    const scene = screen.getByTestId('gopher-scene')
+    const card = screen.getByTestId('login-card')
+    // 场景在列内、不在卡内（双向包含关系各钉一条，footer 残留也会被抓）
+    expect(scene.closest('[data-testid="login-scene-col"]')).toBe(sceneCol)
+    expect(scene.closest('[data-testid="login-card"]')).toBeNull()
+    // 卡仍是表单载体（登录钮在卡内）、场景列不含表单
+    expect(screen.getByRole('button', { name: '登录' }).closest('[data-testid="login-card"]')).toBe(card)
+    expect(card.querySelector('form')).not.toBeNull()
+    expect(sceneCol.querySelector('form')).toBeNull()
+    // 装饰语义不变：场景 svg aria-hidden + 独立列仍带旧 footer 的注册提示在卡内
+    expect(scene.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
+    expect(screen.getByText('注册暂未开放')).toBeInTheDocument()
+  })
 })
