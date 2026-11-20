@@ -15,15 +15,17 @@
 // Task 10 追加：预览 sheet 接线——previewRow 状态 + openPreview 单点汇入（双击行/右键「预览」/
 // 单击·Enter 文件名按钮三路，评审强制项⑭）；下载/关闭在 sheet 头部自足，问 AI 恒 disabled 至 Task 12。
 // Task 2-B（布局密度）追加：checkbox selection 派生右栏 DetailPanel（lg 起双栏、窄屏 hidden 单栏；
-// abc-3 面板数据源=勾选集合，单击行名预览/进目录不劫持；abc-4 单选浮条隐藏、面板唯一动作载体——
+// abc-3 面板数据源=勾选集合，单击行名预览/进目录不劫持；abc-4 单选浮条隐藏、面板唯一动作载体
+// （<lg 例外=终评修波 abc-6：窄屏面板 hidden，RowToolbar 对单选兜底批量动作面，lg+ 语义零变化）——
 // 面板动作全部复用本页既有 handler（openPreview/runDownload/setRenameTarget/setMoveTarget/openAsk/
 // setDeleteTargets），零第二套 mutation；「所在目录」行复用 searchSourceLabel 同函数无 BFS；
 // 关闭钮=清 selection + clearSelectionToken 递增经 FilesTable 缝双向复位 checkbox）。
 // Task 3-C（布局密度）追加：根浏览态页头与列表之间挂 RecentStrip 仪表盘带（最近添加卡片+存储环）；
-// abc-1 零新请求——数据=getQueryData 只读 ['files',0,1]/['usage'] 既有缓存（详见派生块注释）；
+// abc-1 零新请求——['files',0,1]=getQueryData 只读快照（不回补）；['usage']=与 TopBar 同 key 同参的
+// 共享订阅（usageQueryOptions 单源，TanStack 同键去重=零新请求，终评修波 #6，详见派生块注释）；
 // 带在场时 FilesTable 内滚扣减经新缝 listScrollOffsetPx 叠加 STRIP_HEIGHT_PX（单源组装在本页 JSX）。
 import { useEffect, useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { Alert, AlertDescription, AlertTitle } from '@/components/glinui/components/alert'
@@ -44,7 +46,7 @@ import { DropOverlay } from '@/components/app/DropOverlay'
 import { Empty } from '@/components/app/Empty'
 import { GopherScene } from '@/components/app/GopherScene'
 import { Pagination } from '@/components/app/Pagination'
-import { folderIdFromLocation } from '@/components/app/TopBar'
+import { folderIdFromLocation, usageQueryOptions } from '@/components/app/TopBar'
 import { ApiError } from '@/api/client'
 import { deleteFolder, downloadFile, trashFile, type FileItem, type PageResult } from '@/api/storage'
 import { isUsableTrail, navTrailKey, setTrail } from '@/features/files/crumbs'
@@ -68,7 +70,7 @@ import { RowContextMenu } from './RowContextMenu'
 import { RowToolbar } from './RowToolbar'
 import { useUploadManager } from './useUploadManager'
 import { FilesTable, LIST_SCROLL_OFFSET_PX, searchSourceLabel } from './FilesTable'
-import { RecentStrip, STRIP_HEIGHT_PX, recentCards, type UsageCache } from './RecentStrip'
+import { RecentStrip, STRIP_HEIGHT_PX, recentCards } from './RecentStrip'
 import { useFileRows } from './useFileRows'
 import type { FileRow } from './useFileRows'
 
@@ -144,19 +146,33 @@ export function FilesPage() {
     setClearSelectionToken((token) => token + 1)
   }
   const panelSubjectOf = (row: FileRow): DetailPanelSubject => {
-    // 浏览态行 folderId 恒=当前目录（folder 行契约无该字段，容器=folderId）；搜索态文件行=真实源目录。
-    const locationId = row.kind === 'file' ? row.folderId : folderId
-    const iconKind = row.kind === 'folder' ? null : classifyFileIcon(row.name, row.contentType)
+    // 终评修波 #4：按 row.kind 判别式直接双分支（原单对象+`iconKind!` 非空断言塌掉判别联合，已退役）。
+    // 所在目录源 id：浏览态行恒=当前目录（folder 行契约无 folderId 字段，容器=folderId）；搜索态文件行=真实源目录。
+    if (row.kind === 'folder') {
+      return {
+        key: `folder:${row.id}`,
+        name: row.name,
+        icon: FOLDER_ICON,
+        toneClass: FOLDER_TONE_CLASS,
+        fields: [
+          { label: '类型', value: '文件夹' },
+          { label: '大小', value: '—' },
+          { label: '修改时间', value: row.dateText },
+          { label: '所在目录', value: searchSourceLabel(queryClient.getQueryData(navTrailKey(folderId)), folderId) },
+        ],
+      }
+    }
+    const iconKind = classifyFileIcon(row.name, row.contentType)
     return {
-      key: `${row.kind}:${row.id}`,
+      key: `file:${row.id}`,
       name: row.name,
-      icon: row.kind === 'folder' ? FOLDER_ICON : fileIcon(row.name, row.contentType),
-      toneClass: row.kind === 'folder' ? FOLDER_TONE_CLASS : FILE_ICON_TONE_CLASS[iconKind!],
+      icon: fileIcon(row.name, row.contentType),
+      toneClass: FILE_ICON_TONE_CLASS[iconKind],
       fields: [
-        { label: '类型', value: iconKind === null ? '文件夹' : FILE_ICON_KIND_LABEL[iconKind] },
-        { label: '大小', value: row.kind === 'file' ? row.sizeText : '—' },
+        { label: '类型', value: FILE_ICON_KIND_LABEL[iconKind] },
+        { label: '大小', value: row.sizeText },
         { label: '修改时间', value: row.dateText },
-        { label: '所在目录', value: searchSourceLabel(queryClient.getQueryData(navTrailKey(locationId)), locationId) },
+        { label: '所在目录', value: searchSourceLabel(queryClient.getQueryData(navTrailKey(row.folderId)), row.folderId) },
       ],
     }
   }
@@ -194,20 +210,23 @@ export function FilesPage() {
         ]
       : []
 
-  // Task 3-C 根目录仪表盘带（abc-1 零新请求）：两数据源均为既有缓存快照——
-  //   ['files',0,1]：useFileRows 在根第 1 页浏览态订阅的**同一 key**（服务端 created_at DESC，
-  //     recentCards 直取前 6 文件行；搜索/翻页态该 key 可能未在场 → 环独降格，**绝不回补请求**）；
-  //   ['usage']：TopBar 已订阅（60s staleTime + 窗口聚焦重取），本页只 getQueryData 读快照。
-  // getQueryData 不订阅、不发请求（TanStack 语义）；['usage'] 更新后本组件借自然重渲染追平
-  // （仪表盘带为布局层，非计量表，秒级滞后有意接受——要实时请升格为订阅，那才是新请求源）。
-  // 渲染闸：folderId===0 && !keywordMode（缓存读取先按此收口）且至少一个数据源有内容
+  // Task 3-C 根目录仪表盘带（abc-1 零新请求；终评修波 #6 数据源改造）：
+  //   ['files',0,1]：useFileRows 在根第 1 页浏览态订阅的**同一 key**，仍 getQueryData **只读快照**
+  //     （服务端 created_at DESC，recentCards 直取前 6 文件行；搜索/翻页态该 key 可能未在场 →
+  //     环独降格，**绝不回补请求**——升格订阅会把 page=1 拉进深链首屏，钉不变）；
+  //   ['usage']：升格为**共享订阅**——复用 TopBar 的 usageQueryOptions（同 key 同参），TanStack 对同
+  //     queryKey 去重，**升格订阅≠新请求源**（旧注释此处口径错误已修）：真实应用 TopBar 恒在场、带侧
+  //     observer 搭车；测试场景缓存命中+staleTime 60s=fresh 挂载零补发（fetch 路由钉不回归）。
+  //   收益：['usage'] 缓存更新即时随动重渲染，快照方案「滞后靠自然重渲染追平」的不对称就此消除（minors#9 关闭）。
+  // 渲染闸：folderId===0 && !keywordMode（两源读取先按此收口）且至少一个数据源有内容
   //   （全缺位时不占首屏，列表回基线扣减）。
-  const recentFiles = folderId === 0 && !state.keywordMode
+  const stripGate = folderId === 0 && !state.keywordMode
+  const usageView = useQuery({ ...usageQueryOptions, enabled: stripGate })
+  const recentFiles = stripGate
     ? queryClient.getQueryData<PageResult<FileItem>>(['files', 0, 1])?.items
     : undefined
-  const usageSnapshot = folderId === 0 && !state.keywordMode
-    ? queryClient.getQueryData<UsageCache>(['usage'])
-    : undefined
+  // enabled=false 时 data 仍可能来自既有缓存（TanStack 语义）——闸在消费侧显式收口，与改造前等价。
+  const usageSnapshot = stripGate ? usageView.data : undefined
   const stripCards = recentCards(recentFiles ?? [])
   // 判定式=RecentStrip 内部 null 闸（双缺位不渲染）的镜像——带若实际不落 DOM，扣减也不叠加（单源一致）。
   const showRecentStrip = stripCards.length > 0 || usageSnapshot !== undefined

@@ -4,10 +4,10 @@
 // 组件：卡片=icon+名称+大小+相对时间、点击=openPreview 同缝（onOpen 上抛 mergeRows 同源 FileRow）、
 // ring=ProgressCircle 百分比文本/aria-valuenow、usage 缺位=无环、双缺位=渲染 null。
 // FilesPage 接线（abc-1 零新请求）：仅 folderId===0 且非搜索态渲染；10 文件页 → 卡片 ≤6；
-// 文件夹行永不进带（['files',0,1] 缓存按 API 形态 files-only，行为级钉）；['usage']/['files',0,1]
-// 只读缓存不发请求（fetch 路由层断言）；?page=2 深链无页 1 缓存 → 环独降格且**不回补** page=1 请求；
+// 文件夹行永不进带（['files',0,1] 缓存按 API 形态 files-only，行为级钉）；['files',0,1] 只读快照
+// 不请求、['usage'] 同 key 共享订阅（缓存命中=fresh，零新请求，fetch 路由层断言均保留）；?page=2 深链无页 1 缓存 → 环独降格且**不回补** page=1 请求；
 // 带在场时列表 max-h 变量=基线+STRIP_HEIGHT_PX（单源常量，杜绝两套魔法数——brief Step 2）。
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { act, cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes } from 'react-router'
@@ -35,15 +35,22 @@ function jsonResponse(status: number, body: unknown): Response {
   return { ok: status >= 200 && status < 300, status, json: async () => body } as unknown as Response
 }
 
-/** 相对 now 的 ISO（本地时区安全：只用作日历日差，不锚定墙钟时刻）。 */
-const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString()
+/**
+ * 今日本地正午 ISO（终评修波 #5 防午夜闪断）：旧 hoursAgo(1) 在 00:00–01:00 运行会跨过日历日界
+ * →「今天」断言红。本地正午=日历日差恒 0（formatRelative 按本地日历日归零判定，与运行墙钟无关）；
+ * new Date(y,m,d,12) 本地构造→toISOString→再解析必落同一天，时区安全（lib/format.test.ts 同法）。
+ */
+const todayNoonIso = (): string => {
+  const now = new Date()
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0).toISOString()
+}
 
 const fileItem = (id: number, name: string, contentType: string, size = 1024, createdAt = '2026-03-03T12:00:00Z'): FileItem => ({
   id, folder_id: 0, original_name: name, size, content_type: contentType, created_at: createdAt,
 })
 
 const FILE_A = fileItem(10, 'a.txt', 'text/plain', 1536)
-const FILE_PNG = fileItem(12, 'photo.png', 'image/png', 2048, hoursAgo(1)) // 最近添加 → 「今天」
+const FILE_PNG = fileItem(12, 'photo.png', 'image/png', 2048, todayNoonIso()) // 今日正午 → 「今天」（任何墙钟时刻稳定）
 
 let filesBody: unknown = { items: [FILE_A, FILE_PNG], pagination: { page: 1, page_size: 20, total: 2 } }
 let foldersBody: unknown = {
@@ -167,8 +174,8 @@ describe('RecentStrip（纯呈现件：卡片字段/点击同缝/环独降格/�
     expect(within(strip).getByText('a.txt')).toBeInTheDocument()
     expect(within(strip).getByText('photo.png')).toBeInTheDocument()
     // 副行=「大小 · 相对时间」单节点合成文本（regex 匹配整行）
-    expect(within(strip).getByText(/1\.5 KB · 2026-03-03/)).toBeInTheDocument() // FILE_A=7 天外回退日期
-    expect(within(strip).getByText(/2\.0 KB · 今天/)).toBeInTheDocument() // FILE_PNG=1h 前
+    expect(within(strip).getByText(/1\.5 KB · 2026-03-03/)).toBeInTheDocument() // FILE_A=7 天外回退日期（固定 ISO 日，无墙钟依赖）
+    expect(within(strip).getByText(/2\.0 KB · 今天/)).toBeInTheDocument() // FILE_PNG=今日正午（修波#5：午界闪断根除）
     expect(within(strip).getByText('50%')).toBeInTheDocument()
     expect(within(strip).queryByText('照片')).toBeNull()
   })
@@ -230,8 +237,24 @@ describe('FilesPage 接线：仅根浏览态出带；缓存读取零新请求', 
     expect(within(strip).getByText('50%')).toBeInTheDocument()
     // max-h 切换：基线 + STRIP_HEIGHT_PX（与常量同源，浏览器校准行走 C13.1）
     expect(frameMaxHeightVar()).toBe(`calc(100vh - ${LIST_SCROLL_OFFSET_PX + STRIP_HEIGHT_PX}px)`)
-    // abc-1 零新请求：['usage'] 只读缓存（无 TopBar 订阅方），带不自己发 /storage/usage
+    // abc-1 零新请求（修波#6 语义）：['usage'] 走与 TopBar 同 key 同 options 的共享订阅——
+    // 缓存命中且 staleTime 60s 内为 fresh → 订阅挂载即零请求（fetch 路由钉在此显证不回归）。
     await Promise.resolve()
+    expect(fetchMock.mock.calls.every(([u]) => !String(u).includes('/api/v1/storage/usage'))).toBe(true)
+  })
+
+  it("['usage'] 订阅（修波#6）：缓存更新 → 带随动重渲染（旧 getQueryData 快照方案不随动）", async () => {
+    renderPage('/files', (client) => client.setQueryData(['usage'], USAGE))
+    const strip = await screen.findByTestId('recent-strip')
+    // 先等页 1 查询落定（卡片上桌）——排除「files 请求回来恰好触发重渲染追平快照」的偶发通路，
+    // 让本锚只可能由 ['usage'] 订阅随动兑现。
+    expect(await within(strip).findAllByTestId(/^recent-card-/)).toHaveLength(2)
+    expect(within(strip).getByText('50%')).toBeInTheDocument()
+    act(() => {
+      queryClient.setQueryData(['usage'], { used_bytes: 2 * 1024 ** 3, quota_bytes: 10 * 1024 ** 3 })
+    })
+    expect(await within(strip).findByText('20%')).toBeInTheDocument()
+    // 更新走缓存直写：全程仍零 /storage/usage 请求
     expect(fetchMock.mock.calls.every(([u]) => !String(u).includes('/api/v1/storage/usage'))).toBe(true)
   })
 

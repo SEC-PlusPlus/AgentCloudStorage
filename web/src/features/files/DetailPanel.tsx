@@ -99,8 +99,10 @@ export function DetailPanel({ selection, actions, bulkActions, onClose }: Detail
       role="complementary"
       aria-label="选中详情"
       data-testid="detail-panel"
-      // 窄屏隐藏 + lg 右栏 ~340px + sticky 顶对齐（brief §B；类锚测试钉 hidden/lg:block）
-      className="hidden w-[340px] shrink-0 lg:sticky lg:top-4 lg:block"
+      // 窄屏隐藏 + lg 右栏 ~340px + sticky 顶对齐（brief §B；类锚测试钉 hidden/lg:block）。
+      // sticky 顶=72px（终评修波 #3：TopBar min-h-14=56px + 16px 呼吸位；旧 lg:top-4=16px 会顶进
+      // 固定 TopBar 身后）；<lg 单选的动作面兜底在 RowToolbar（abc-6），本面板维持 hidden 语义。
+      className="hidden w-[340px] shrink-0 lg:sticky lg:top-[72px] lg:block"
     >
       <GlassCard size="sm">
         <GlassCardHeader className="flex flex-row items-start gap-2">

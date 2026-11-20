@@ -1,6 +1,7 @@
 // 根目录仪表盘带（Task 3-C / 布局密度计划 §C）：**纯呈现件**（同 DetailPanel 纪律）——
-// 数据（页 1 缓存文件行 + ['usage'] 缓存）由 FilesPage 经 queryClient.getQueryData 读好后注入 props，
-// 本组件零业务、零 mutation、**零请求**（abc-1 裁定：布局层，只消费既有缓存查询）。
+// 数据（页 1 缓存文件行=getQueryData 只读快照 + ['usage']=与 TopBar 同 key 共享订阅的 data，
+// 终评修波 #6）由 FilesPage 读好后注入 props，本组件零业务、零 mutation、**零请求**
+// （abc-1 裁定：布局层，只消费既有缓存查询；同 key 订阅经 TanStack 去重=仍零新请求）。
 // 渲染域（FilesPage 侧闸）：folderId===0 且非搜索态的浏览列表上方；「最近添加」直接取缓存前 N
 // ——服务端 created_at DESC（本仓早前核验），recentCards 不重排；页 1 数据形态（PageResult<FileItem>）
 // 按 API 天然 files-only，文件夹行结构上不可能进带（行为级钉在接线集成测试）。
@@ -10,7 +11,7 @@
 // 中心百分比文本自 showValue）；usage 缓存缺位=只出卡片不出环，双缺位=返回 null。
 // STRIP_HEIGHT_PX：带在 main 列纵向占位（带体 + 其下 gap-3）的单源常量——FilesPage 组
 // listScrollOffsetPx=LIST_SCROLL_OFFSET_PX+本值 喂内滚 max-h（brief Step 2「避免两套魔法数」）；
-// 环独降级（?page=2 深链无页 1 缓存）同带高（单行布局），不产生二次跳动。浏览器校准=C13.1。
+// 环独降级（?page=2 深链无页 1 缓存）同带高（单行布局），不产生二次跳动。浏览器确认（非发现）=C13.1。
 import type { LucideIcon } from 'lucide-react'
 import { GlassCard, GlassCardContent } from '@/components/glinui/components/glass-card'
 import { ProgressCircle } from '@/components/glinui/components/progress'
@@ -26,15 +27,16 @@ export interface UsageCache {
 }
 
 /**
- * 带高单源常量（内滚扣减消费，见头注）——构成：
- *   GlassCard sm 上下壳（p-3 × 2）                        ≈ 24
- *   带内容行高 = max(环 sm 48, 双行卡 py-1.5+20+14 ≈ 48)   = 48
- *   卡片区与容器间的换行安全余量                            ≈ 0（卡片行 overflow-x-auto 恒单行）
- *   带 ↔ 列表 gap（主列 flex-col gap-3）                    = 12
- *   合计                                                    84
- * 「≈」为 vendored 组件确定档位近似；偏差由矩阵 C13.1 浏览器校准（只改本常量一处）。
+ * 带高单源常量（内滚扣减消费，见头注）——构成（终评修波 #1：逐项自 vendored 源码推导，不再近似）：
+ *   GlassCard size=sm 壳上下内衬 p-4 × 2（glass-card.js glassCardVariants）      32
+ *   GlassCardContent 显式 p-3 × 2（与壳内衬**叠加**，非覆盖——cn 只并类不抵消）  24
+ *   带内容行高 = max(环 sm h-12=48（progress.js progressCircleVariants）,
+ *                    双行卡 py-1.5 + 20 + 14 ≈ 48)                              48
+ *   带 ↔ 列表 gap（主列 flex-col gap-3）                                          12
+ *   合计                                                                         116
+ * 矩阵 C13.1=对该推导值的浏览器**确认**（非发现）；仍只改本常量一处。
  */
-export const STRIP_HEIGHT_PX = 84
+export const STRIP_HEIGHT_PX = 116
 
 /** 缺省卡片上限（brief：limit 6）。 */
 export const RECENT_CARD_LIMIT = 6

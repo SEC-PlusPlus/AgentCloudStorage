@@ -3,7 +3,7 @@
 // + FilesPage 接线钉（abc-3 数据源=checkbox 勾选、abc-4 单选浮条隐藏/多选并存、关闭钮=清勾选经
 // clearSelectionToken 缝同步复位 checkbox、批量回收站复用既有确认弹窗渠道）。
 // TrashPage 侧面板（abc-2 无永久删除）钉在 trash-page.test.tsx（复用其 fetch/路由桩）。
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes } from 'react-router'
@@ -141,6 +141,9 @@ function defaultImpl(input: RequestInfo | URL, init?: RequestInit): Promise<Resp
 
 const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => impl(input, init))
 
+// jsdom 缺省内宽（=1024=Tailwind lg 激活）——abc-6 用例临时钉 800 后由此还原。
+const ORIGINAL_INNER_WIDTH = window.innerWidth
+
 function renderPage(entry = '/files?folder=3') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
@@ -171,6 +174,8 @@ describe('FilesPage 接线：checkbox selection → 右栏面板（abc-3/abc-4�
     impl = defaultImpl
     cleanup()
     vi.unstubAllGlobals()
+    // abc-6 用例钉过 innerWidth（800）——回 jsdom 缺省（1024=lg 激活），防跨用例泄漏
+    Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: ORIGINAL_INNER_WIDTH })
   })
 
   it('勾选单选 → aside 出现（元数据+所在目录复用 searchSourceLabel 模式）；RowToolbar 隐藏（abc-4 面板唯一载体）', async () => {
@@ -263,5 +268,34 @@ describe('FilesPage 接线：checkbox selection → 右栏面板（abc-3/abc-4�
     await userEvent.click(screen.getByRole('button', { name: 'a.txt' }))
     expect(await screen.findByRole('dialog', { name: 'a.txt' })).toBeInTheDocument()
     expect(within(screen.getByTestId('detail-panel')).getByTestId('panel-name')).toHaveTextContent('a.txt')
+  })
+
+  // —— 终评修波 abc-6：<lg 单选操作面兜底 ——
+  // DetailPanel aside 是 hidden lg:block：窄屏下面板不占位，若浮条仍恒 <2 缺席则单选零动作入口
+  //（branch 前回退）。裁定：浮条渲染条件=(a) selection≥2 任意宽（今日语义）或 (b) 单选且 <lg。
+  // jsdom 不跑媒体查询——按 window.innerWidth 钉（800=非 lg；restore 在本 describe 的 afterEach）。
+  it('<lg 单选 → 浮条兜底出现（已选 1 项+下载/移入回收站）；<lg 多选计数照常', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: 800 })
+    renderPage()
+    await screen.findByText('a.txt')
+    await selectRow('a.txt')
+    const toolbar = await screen.findByTestId('row-toolbar')
+    expect(within(toolbar).getByTestId('toolbar-count')).toHaveTextContent('已选 1 项')
+    expect(within(toolbar).getByRole('button', { name: '下载' })).toBeInTheDocument()
+    expect(within(toolbar).getByRole('button', { name: '移入回收站' })).toBeInTheDocument()
+    await selectRow('报告.pdf') // 批量语义不变：加一行仍是同一浮条、计数 2
+    expect(within(toolbar).getByTestId('toolbar-count')).toHaveTextContent('已选 2 项')
+  })
+
+  it('<lg 单选浮条在场 → resize 回 lg → 浮条退场（resize 订阅显证；abc-4 lg+ 语义不回归）', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: 800 })
+    renderPage()
+    await screen.findByText('a.txt')
+    await selectRow('a.txt')
+    await screen.findByTestId('row-toolbar')
+    Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: ORIGINAL_INNER_WIDTH })
+    act(() => window.dispatchEvent(new Event('resize')))
+    await waitFor(() => expect(screen.queryByTestId('row-toolbar')).toBeNull())
+    expect(await screen.findByTestId('detail-panel')).toBeInTheDocument() // lg+ 单选载体仍是面板
   })
 })

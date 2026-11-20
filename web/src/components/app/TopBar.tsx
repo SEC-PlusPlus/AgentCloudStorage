@@ -26,6 +26,19 @@ export function folderIdFromLocation(pathname: string, search: string): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : ROOT_FOLDER_ID
 }
 
+/**
+ * ['usage'] 订阅参数单源（终评修波 #6）：TopBar 计量条与 FilesPage 仪表盘带**同键同参**消费——
+ * TanStack 对同 queryKey 去重，带侧订阅=搭 TopBar 的车，零新请求（abc-1 语义原样）。
+ * staleTime 60s：缓存命中挂载不再触发补发（recent-strip fetch 路由钉依赖此口径）。
+ */
+export const usageQueryOptions = {
+  queryKey: ['usage'],
+  queryFn: getStorageUsage,
+  staleTime: 60 * 1000,
+  retry: false,
+  refetchOnWindowFocus: true, // brief：窗口聚焦重取（TanStack 内置 window focus 事件）
+} as const
+
 export function TopBar() {
   const { pathname, search } = useLocation()
   const navigate = useNavigate()
@@ -76,13 +89,7 @@ export function TopBar() {
         : () => navigate(crumb.id === ROOT_FOLDER_ID ? '/files' : `/files?folder=${crumb.id}`),
   }))
 
-  const usageQuery = useQuery({
-    queryKey: ['usage'],
-    queryFn: getStorageUsage,
-    staleTime: 60 * 1000,
-    retry: false,
-    refetchOnWindowFocus: true, // brief：窗口聚焦重取（TanStack 内置 window focus 事件）
-  })
+  const usageQuery = useQuery(usageQueryOptions)
   const usage = usageQuery.data
   // quota 缺失/为 0（防御旧数据）时百分比按 0 显示，不出现 NaN。
   const percent =
