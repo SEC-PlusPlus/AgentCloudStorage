@@ -20,6 +20,7 @@ type Config struct {
 	MinIO  MinIOConfig  `mapstructure:"minio"`
 	JWT    JWTConfig    `mapstructure:"jwt"`
 	AI     AIConfig     `mapstructure:"ai"`
+	Agent  AgentConfig  `mapstructure:"agent"`
 }
 
 type ServerConfig struct {
@@ -82,6 +83,14 @@ type AIConfig struct {
 	APIKey  string `mapstructure:"api_key"`
 }
 
+// AgentConfig 指向拆分出去的 Python agent 服务；其 HTTP 调用超时
+// 必须大于 agent 侧 llm_timeout（当前 45s），故默认取 60s。
+type AgentConfig struct {
+	BaseURL string        `mapstructure:"base_url"`
+	APIKey  string        `mapstructure:"api_key"`
+	Timeout time.Duration `mapstructure:"timeout"`
+}
+
 // Load 读取非敏感 YAML，并允许环境变量覆盖或提供敏感配置。
 func Load() (Config, error) {
 	v := viper.New()
@@ -114,6 +123,9 @@ func Load() (Config, error) {
 		"jwt.issuer":               "JWT_ISSUER",
 		"jwt.access_ttl":           "JWT_ACCESS_TTL",
 		"ai.api_key":               "AI_API_KEY",
+		"agent.base_url":           "AGENT_BASE_URL",
+		"agent.api_key":            "AGENT_API_KEY",
+		"agent.timeout":            "AGENT_TIMEOUT",
 	}
 	for key, env := range bindings {
 		if err := v.BindEnv(key, env); err != nil {
@@ -128,6 +140,11 @@ func Load() (Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return Config{}, fmt.Errorf("decode config: %w", err)
+	}
+	// 项目未使用 viper.SetDefault，超时默认值在此处归一化：
+	// 未配置（零值）时取 60s，必须 > agent 侧 llm_timeout 45s；负值交给 validate 拒绝。
+	if cfg.Agent.Timeout == 0 {
+		cfg.Agent.Timeout = 60 * time.Second
 	}
 	if err := cfg.validate(); err != nil {
 		return Config{}, err
@@ -173,6 +190,10 @@ func (c Config) validate() error {
 		return errors.New("jwt.issuer is required")
 	case c.JWT.AccessTTL <= 0:
 		return errors.New("jwt.access_ttl must be positive")
+	case c.Agent.Timeout < 0:
+		return errors.New("agent.timeout must be positive")
+	case strings.TrimSpace(c.Agent.BaseURL) != "" && strings.TrimSpace(c.Agent.APIKey) == "":
+		return errors.New("agent.api_key is required when agent.base_url is set")
 	}
 	return nil
 }

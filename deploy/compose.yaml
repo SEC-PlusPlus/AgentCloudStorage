@@ -1,0 +1,75 @@
+name: agentcloudstorage
+
+# The Go server runs on the host. Publish dependencies only on loopback;
+# never use the local-development compose file on a public server.
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    command:
+      - --innodb-buffer-pool-size=128M
+      - --max-connections=30
+      - --performance-schema=OFF
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in deploy/.env}
+      MYSQL_DATABASE: govault
+      MYSQL_USER: govault
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in deploy/.env}
+    ports:
+      - "127.0.0.1:3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ../migrations:/docker-entrypoint-initdb.d:ro
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY in deploy/.env}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY in deploy/.env}
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio-data:/data
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in deploy/.env}
+    command:
+      - sh
+      - -c
+      - exec redis-server --appendonly no --maxmemory 64mb --maxmemory-policy noeviction --requirepass "$${REDIS_PASSWORD}"
+    ports:
+      - "127.0.0.1:6380:6379"
+
+  # 生产形态（spec §7）：agent 只绑回环，宿主机 Go 用
+  # AGENT_BASE_URL=http://127.0.0.1:8001 + AGENT_API_KEY=${AGENT_INTERNAL_TOKEN} 访问。
+  # QDRANT_URL 随 P3 本地 RAG 一并引入，本阶段不加。
+  agent:
+    build:
+      context: ..
+      dockerfile: agent/Dockerfile
+    restart: unless-stopped
+    environment:
+      AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:?set AGENT_INTERNAL_TOKEN in deploy/.env}
+      AI_BASE_URL: ${AI_BASE_URL:?set AI_BASE_URL in deploy/.env}
+      AI_MODEL: ${AI_MODEL:?set AI_MODEL in deploy/.env}
+      AI_API_KEY: ${AI_API_KEY:?set AI_API_KEY in deploy/.env}
+    ports:
+      - "127.0.0.1:8001:8001"
+    # slim 镜像无 wget/curl（spec §7 片段的 wget 写法在其上不可用），
+    # 与 agent/Dockerfile HEALTHCHECK 同形用 stdlib 探测 /healthz。
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8001/healthz',timeout=2).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+volumes:
+  mysql-data:
+  minio-data:

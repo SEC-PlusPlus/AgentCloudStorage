@@ -88,3 +88,65 @@ func TestLoadRejectsMissingSecret(t *testing.T) {
 		t.Fatalf("expected JWT_SECRET validation error, got %v", err)
 	}
 }
+
+func setRequiredSecrets(t *testing.T) {
+	t.Helper()
+	t.Setenv("MYSQL_DSN", "test-dsn")
+	t.Setenv("MINIO_ACCESS_KEY", "test-access")
+	t.Setenv("MINIO_SECRET_KEY", "test-secret")
+	t.Setenv("JWT_SECRET", strings.Repeat("x", 32))
+}
+
+func TestAgentTimeoutDefault(t *testing.T) {
+	testConfigFile(t)
+	setRequiredSecrets(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 默认 60s 必须 > agent 侧 llm_timeout 45s，见 Review Focus 1。
+	if cfg.Agent.Timeout != 60*time.Second {
+		t.Fatalf("expected agent timeout default 60s, got %s", cfg.Agent.Timeout)
+	}
+}
+
+func TestAgentRequiresKeyWhenBaseURLSet(t *testing.T) {
+	testConfigFile(t)
+	setRequiredSecrets(t)
+	t.Setenv("AGENT_BASE_URL", "http://127.0.0.1:8000")
+	t.Setenv("AGENT_API_KEY", "")
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "agent.api_key is required when agent.base_url is set") {
+		t.Fatalf("expected agent.api_key validation error, got %v", err)
+	}
+}
+
+func TestAgentRejectsNegativeTimeout(t *testing.T) {
+	testConfigFile(t)
+	setRequiredSecrets(t)
+	t.Setenv("AGENT_TIMEOUT", "-1s")
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "agent.timeout must be positive") {
+		t.Fatalf("expected agent.timeout validation error, got %v", err)
+	}
+}
+
+func TestAgentEnvOverrides(t *testing.T) {
+	testConfigFile(t)
+	setRequiredSecrets(t)
+	t.Setenv("AGENT_BASE_URL", "http://127.0.0.1:8000")
+	t.Setenv("AGENT_API_KEY", "agent-key")
+	t.Setenv("AGENT_TIMEOUT", "90s")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.BaseURL != "http://127.0.0.1:8000" || cfg.Agent.APIKey != "agent-key" || cfg.Agent.Timeout != 90*time.Second {
+		t.Fatalf("agent environment values not loaded: base_url=%q api_key=%q timeout=%s",
+			cfg.Agent.BaseURL, cfg.Agent.APIKey, cfg.Agent.Timeout)
+	}
+}

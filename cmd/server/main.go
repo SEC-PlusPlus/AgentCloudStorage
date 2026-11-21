@@ -7,11 +7,13 @@ import (
 	"PersonalCloudStorage/internal/file"
 	"PersonalCloudStorage/internal/folder"
 	"PersonalCloudStorage/internal/httpapi"
+	"PersonalCloudStorage/internal/knowledge"
 	"PersonalCloudStorage/internal/storage"
 	"PersonalCloudStorage/internal/upload"
 	"PersonalCloudStorage/internal/user"
 	"context"
 	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -79,19 +81,45 @@ func main() {
 		folderService,
 	)
 	fileHandler := httpapi.NewFileHandler(fileService)
-	if strings.TrimSpace(cfg.AI.BaseURL) == "" || strings.TrimSpace(cfg.AI.Model) == "" || strings.TrimSpace(cfg.AI.APIKey) == "" {
-		log.Fatal("AI 配置不完整：需要 ai.base_url、ai.model 和 ai.api_key（建议通过 AI_API_KEY 环境变量提供）")
+
+	// Task 9 双档降级：agent.base_url 已配置时 remote 为 primary；
+	// AI 配置完整则再构造 local 档组成 composite，否则仅 remote 并响亮 Warn。
+	var answerer knowledge.Answerer
+	if strings.TrimSpace(cfg.Agent.BaseURL) != "" {
+		// remote.go 逐字拼接 baseURL+"/v1/ask"，故在此规范化：先 TrimSpace 去掉
+		// 带引号 YAML 值可能带入的首尾空白，再 TrimRight 去尾斜杠（controller ruling）。
+		remote := knowledge.NewRemoteAnswerer(
+			strings.TrimRight(strings.TrimSpace(cfg.Agent.BaseURL), "/"),
+			cfg.Agent.APIKey,
+			cfg.Agent.Timeout,
+		)
+		var local knowledge.Answerer
+		if !aiConfigComplete(cfg) {
+			slog.Warn("no local fallback tier: AI 配置不完整，agent 故障时将无法降级到本地",
+				"agent_base_url", cfg.Agent.BaseURL)
+		} else if localAnswerer, buildErr := newLocalAnswerer(cfg); buildErr != nil {
+			// 配置看似完整但模型构造失败：remote 档仍可独立工作，不 Fatal。
+			slog.Warn("no local fallback tier: 创建 AI 模型失败，agent 故障时将无法降级到本地", "error", buildErr)
+		} else {
+			local = localAnswerer
+		}
+		if local != nil {
+			answerer = knowledge.NewCompositeAnswerer(remote, local)
+		} else {
+			answerer = remote
+		}
+	} else {
+		// 原 AI 必填校验与 chatModel 构造整体移入此分支。
+		if !aiConfigComplete(cfg) {
+			log.Fatal("AI 配置不完整：需要 ai.base_url、ai.model 和 ai.api_key（建议通过 AI_API_KEY 环境变量提供）")
+		}
+		local, err := newLocalAnswerer(cfg)
+		if err != nil {
+			log.Fatal("创建 AI 模型失败:", err)
+		}
+		answerer = local
 	}
-	chatModel, err := openai.NewChatModel(context.Background(), &openai.ChatModelConfig{
-		BaseURL: cfg.AI.BaseURL,
-		Model:   cfg.AI.Model,
-		APIKey:  cfg.AI.APIKey,
-		Timeout: 120 * time.Second,
-	})
-	if err != nil {
-		log.Fatal("创建 AI 模型失败:", err)
-	}
-	knowledgeHandler := httpapi.NewKnowledgeHandler(fileService, chatModel)
+	knowledgeHandler := httpapi.NewKnowledgeHandler(fileService, answerer)
 
 	uploadRepository := upload.NewGORMRepository(db)
 	uploadService := upload.NewService(objectStorage, uploadRepository, folderService)
@@ -126,4 +154,26 @@ func main() {
 	if err := router.Run(cfg.Server.Addr); err != nil {
 		log.Fatal("启动HTTP服务失败:", err)
 	}
+}
+
+// aiConfigComplete 判断本地档（eino chatModel）三项必填是否齐全；
+// 调用方按所处装配分支决定缺失是 Fatal（无 remote 档）还是 Warn（Task 9）。
+func aiConfigComplete(cfg config.Config) bool {
+	return strings.TrimSpace(cfg.AI.BaseURL) != "" &&
+		strings.TrimSpace(cfg.AI.Model) != "" &&
+		strings.TrimSpace(cfg.AI.APIKey) != ""
+}
+
+// newLocalAnswerer 构造本地档；语义与原 main 内联版本逐字一致（含 120s 模型超时）。
+func newLocalAnswerer(cfg config.Config) (knowledge.Answerer, error) {
+	chatModel, err := openai.NewChatModel(context.Background(), &openai.ChatModelConfig{
+		BaseURL: cfg.AI.BaseURL,
+		Model:   cfg.AI.Model,
+		APIKey:  cfg.AI.APIKey,
+		Timeout: 120 * time.Second,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return knowledge.NewLocalAnswerer(chatModel), nil
 }

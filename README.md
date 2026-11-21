@@ -13,6 +13,7 @@ Go、Gin、GORM、MySQL、MinIO、Redis、JWT、Viper。
 - 文件夹管理、回收站与永久删除
 - 存储用量统计和容量配额
 - Redis 登录尝试限流：同一邮箱与来源地址 10 分钟内最多尝试 5 次，成功登录后清零
+- 单文件资料问答（M7/P2）：问答由独立 Python agent 服务（`agent/`）承载，支持非流式与 SSE 流式（`stream: true`）；Go 侧双档降级，agent 瞬时故障自动回落内置本地 eino 档
 
 ## 本地 Redis
 
@@ -47,6 +48,8 @@ npm run dev
 ```
 
 前端地址是 `http://127.0.0.1:5173`，开发服务器会把 `/api` 请求转发到本机 `8080` 端口。不要将本地 `config.yaml`、`.env` 或 Docker 数据目录提交到仓库。
+
+知识问答需另起 Python agent 服务：venv 创建与启动命令见 `agent/README.md`，并给 Go 进程设置 `AGENT_BASE_URL` 与 `AGENT_API_KEY`（值等于 agent 的 `AGENT_INTERNAL_TOKEN`）。生产按 `deploy/compose.yaml` 将 agent 只绑回环 `127.0.0.1:8001`，供宿主机 Go 访问；SSE 流式对公网开放随 React 前端一并启用，生产先行部署的是 agent 的 `/v1/ask` 非流式档。
 
 ## 当前状态
 
