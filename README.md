@@ -1,5 +1,7 @@
 # AgentCloudStorage
 
+[![CI](https://github.com/SEC-PlusPlus/AgentCloudStorage/actions/workflows/ci.yml/badge.svg)](https://github.com/SEC-PlusPlus/AgentCloudStorage/actions/workflows/ci.yml)
+
 基于 Go 的个人智能化网盘项目。基础网盘与单文件智能问答已上线本地链路（Python agent 微服务 + 双档降级），跨文件知识库（RAG）与文档理解功能开发中。
 
 ## 技术栈
