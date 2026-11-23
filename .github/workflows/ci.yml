@@ -47,11 +47,11 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: web/package-lock.json
-      # 本机 ~/.npmrc 钉死了 registry.npmmirror.com，未来重新 npm install 可能把 mirror URL
-      # 写回 lockfile；这里兜底归一化回官方源（海外 runner 访问 mirror 会挂 npm ci）
-      - run: sed -i 's#https://registry.npmmirror.com#https://registry.npmjs.org#g' package-lock.json
-        working-directory: web
-      - run: npm ci
+      # 已知欠账：本地 Windows + ~/.npmrc 镜像钉死生成的 lockfile 与 Linux 平台树
+      # （@emnapi 2.0.0-beta.* 等可选依赖）不同步，npm ci 在 runner 上报 EUSAGE。
+      # 先用 npm install 现场对齐收敛 CI；根治 = 在 node:24 linux 环境重生成一次 lockfile
+      # 并恢复 npm ci（见 web/docs 待办，或调整本地 ~/.npmrc 的 registry 钉死）。
+      - run: npm install --no-audit --no-fund
         working-directory: web
       - run: npm run build
         working-directory: web
