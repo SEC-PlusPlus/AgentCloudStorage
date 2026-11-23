@@ -1,6 +1,6 @@
 # AgentCloudStorage
 
-基于 Go 的个人智能化网盘项目。当前完成基础网盘 API，Agent 知识库功能规划中。
+基于 Go 的个人智能化网盘项目。基础网盘与单文件智能问答已上线本地链路（Python agent 微服务 + 双档降级），跨文件知识库（RAG）与文档理解功能开发中。
 
 ## 技术栈
 
@@ -53,4 +53,4 @@ npm run dev
 
 ## 当前状态
 
-基础业务已完成；自动化测试、部署配置和异常恢复仍在完善。
+基础业务已完成；Go/Python/前端三套测试已接入 GitHub Actions CI（`.github/workflows/ci.yml`：vet+race、pytest、构建门）；部署配置和异常恢复仍在完善。
