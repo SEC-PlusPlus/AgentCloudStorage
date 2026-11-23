@@ -47,6 +47,10 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: web/package-lock.json
+      # 本机 ~/.npmrc 钉死了 registry.npmmirror.com，未来重新 npm install 可能把 mirror URL
+      # 写回 lockfile；这里兜底归一化回官方源（海外 runner 访问 mirror 会挂 npm ci）
+      - run: sed -i 's#https://registry.npmmirror.com#https://registry.npmjs.org#g' package-lock.json
+        working-directory: web
       - run: npm ci
         working-directory: web
       - run: npm run build
