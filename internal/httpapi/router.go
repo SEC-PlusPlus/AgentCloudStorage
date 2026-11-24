@@ -2,12 +2,21 @@ package httpapi
 
 import (
 	"PersonalCloudStorage/internal/auth"
+	"log/slog"
 
 	"github.com/gin-gonic/gin"
 )
 
 func NewRouter(fileHandler *FileHandler, folderHandler *FolderHandler, uploadHandler *UploadHandler, authHandler *AuthHandler, tokenManager *auth.TokenManager, knowledgeHandler *KnowledgeHandler) *gin.Engine {
 	router := gin.New()
+
+	// 生产部署是 nginx 同机反代（deploy/nginx*.conf）：只信回环这一跳的 X-Forwarded-For，
+	// 让 c.ClientIP() 拿到真实访客 IP（spec §6）。不设置的话 gin 默认信任所有代理，
+	// 限流键可被伪造头投毒；直连非可信 IP 则退回 RemoteAddr。
+	if err := router.SetTrustedProxies([]string{"127.0.0.1"}); err != nil {
+		// 常量回环地址不会解析失败；真失败了也只降级告警，绝不 panic 掉启动。
+		slog.Error("set trusted proxies failed; ClientIP falls back to RemoteAddr", "error", err)
+	}
 
 	router.Use(gin.Logger())
 	router.Use(gin.Recovery())
