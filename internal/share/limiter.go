@@ -2,6 +2,8 @@ package share
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"time"
 
@@ -19,8 +21,16 @@ const (
 
 // Key builders — the whole bucketing semantics lives here; middleware must not
 // hand-build strings so the format stays pinned by pure tests (spec §6).
+//
+// VerifyKey SHA-256s the token (house precedent: auth.loginAttemptKey hashes
+// email+IP so secrets never sit in Redis keys — MONITOR/KEYS/RDB/AOF would all
+// expose a share token verbatim, and the token IS the read credential). A
+// fixed-length hex digest also kills the ':' delimiter ambiguity IPv6
+// addresses would otherwise introduce. Per-(ip, token) bucketing is unchanged:
+// the hash is deterministic, so every hit on the same pair lands in one bucket.
 func VerifyKey(token, ip string) string {
-	return "share-verify:" + token + ":" + ip
+	hash := sha256.Sum256([]byte(token))
+	return "share-verify:" + hex.EncodeToString(hash[:]) + ":" + ip
 }
 
 func ReadKey(ip string) string {
@@ -29,13 +39,16 @@ func ReadKey(ip string) string {
 
 var ErrInvalidLimiterArgs = errors.New("share: invalid rate limiter arguments")
 
-// INCR + set TTL on first hit only, all inside one Lua script so two concurrent
-// requests can never leave a TTL-less counter behind (same shape as auth/redis_login_limiter.go).
+// INCR plus a TTL attempt on EVERY hit, all inside one Lua script (same shape
+// as auth/redis_login_limiter.go). The 'NX' flag (Redis >= 7.0, pinned at
+// redis:7-alpine in deploy/compose.yaml) writes the TTL only when the key has
+// none: an unconditional PEXPIRE would keep sliding the window and neuter the
+// limit, while the old `if count == 1` guard could leave a permanently
+// TTL-less key behind if Redis crashed after INCR but before PEXPIRE — that key
+// would then 429 its bucket forever with no expiry to recover it.
 var accessCountScript = redis.NewScript(`
 local count = redis.call('INCR', KEYS[1])
-if count == 1 then
-    redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[2]))
-end
+redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[2]), 'NX')
 if count <= tonumber(ARGV[1]) then
     return 1
 end

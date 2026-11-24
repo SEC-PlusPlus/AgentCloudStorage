@@ -3,6 +3,8 @@ package httpapi
 import (
 	"PersonalCloudStorage/internal/auth"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -121,8 +123,14 @@ func TestRequireShareRateLimitVerifyFailClosed(t *testing.T) {
 	if response.Code != http.StatusOK || !reached {
 		t.Fatalf("allow path: code=%d reached=%v, want 200/true", response.Code, reached)
 	}
-	if limiter.lastKey != "share-verify:AbCdEf12:203.0.113.9" {
-		t.Errorf("verify key = %q, want share-verify:AbCdEf12:203.0.113.9 (token+ClientIP)", limiter.lastKey)
+	// token 以 SHA-256 摘要入键（loginAttemptKey 先例）：原始 token 不许出现在 Redis key 里。
+	h := sha256.Sum256([]byte("AbCdEf12"))
+	wantKey := "share-verify:" + hex.EncodeToString(h[:]) + ":203.0.113.9"
+	if limiter.lastKey != wantKey {
+		t.Errorf("verify key = %q, want %q (hashed token+ClientIP)", limiter.lastKey, wantKey)
+	}
+	if strings.Contains(limiter.lastKey, "AbCdEf12") {
+		t.Errorf("verify key = %q, raw share token leaked into Redis key", limiter.lastKey)
 	}
 	if limiter.lastMax != 5 || limiter.lastWindow != 10*time.Minute {
 		t.Errorf("verify limits = %d/%v, want 5/10m", limiter.lastMax, limiter.lastWindow)
@@ -209,6 +217,29 @@ func TestRequireShareRateLimitUnknownKindFailsLoud(t *testing.T) {
 	}
 	if limiter.calls != 0 {
 		t.Errorf("unknown kind must not consult the limiter, calls=%d", limiter.calls)
+	}
+}
+
+// TestRequireShareRateLimitVerifyWithoutTokenParam 钉死空 token 守卫（Review round-1 MINOR-3）：
+// verify 中间件挂到没有 :token 的路由上属挂载期 programmer error —— 500 且绝不查 limiter。
+func TestRequireShareRateLimitVerifyWithoutTokenParam(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	limiter := &fakeShareLimiter{allowed: true}
+	reached := false
+	router := gin.New()
+	router.POST("/noparam", RequireShareRateLimit(limiter, "verify"), func(c *gin.Context) {
+		reached = true
+		c.Status(http.StatusOK)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/noparam", nil)
+	request.RemoteAddr = "192.0.2.1:54321"
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusInternalServerError || reached {
+		t.Fatalf("empty token: code=%d reached=%v, want 500/false", response.Code, reached)
+	}
+	if limiter.calls != 0 {
+		t.Errorf("empty token guard must not consult the limiter, calls=%d", limiter.calls)
 	}
 }
 

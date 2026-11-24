@@ -2,7 +2,10 @@ package share
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,8 +14,20 @@ import (
 
 func TestShareAccessKeys(t *testing.T) {
 	// key 形态是限流桶的全部语义，纯函数钉死（spec §6）。
-	if got := VerifyKey("t0k1", "203.0.113.9"); got != "share-verify:t0k1:203.0.113.9" {
-		t.Errorf("VerifyKey = %q, want share-verify:t0k1:203.0.113.9", got)
+	// token 必须落 SHA-256 hex（loginAttemptKey 先例：秘密不进 Redis key），
+	// 同时定长摘要消掉 IPv6 ':' 分隔符歧义。
+	digest := func(token string) string {
+		h := sha256.Sum256([]byte(token))
+		return hex.EncodeToString(h[:])
+	}
+	if got, want := VerifyKey("t0k1", "203.0.113.9"), "share-verify:"+digest("t0k1")+":203.0.113.9"; got != want {
+		t.Errorf("VerifyKey = %q, want %q", got, want)
+	}
+	if got := VerifyKey("AbCdEf12", "2001:db8::68"); strings.Contains(got, "AbCdEf12") {
+		t.Errorf("VerifyKey = %q, raw token must never appear in the Redis key", got)
+	}
+	if got := VerifyKey("t0k1", "203.0.113.9"); got != VerifyKey("t0k1", "203.0.113.9") {
+		t.Error("VerifyKey must be deterministic or bucketing breaks")
 	}
 	if got := ReadKey("203.0.113.9"); got != "share-read:203.0.113.9" {
 		t.Errorf("ReadKey = %q, want share-read:203.0.113.9", got)
@@ -119,5 +134,22 @@ func TestRedisAccessLimiter(t *testing.T) {
 	allowed, err = limiter.Allow(ctx, keyC, 1, 300*time.Millisecond)
 	if err != nil || !allowed {
 		t.Fatalf("after window expiry should be allowed again, allowed=%v err=%v", allowed, err)
+	}
+
+	// crash-gap 模拟（Review round-1 RF2）：key 已存在但没有 TTL —— 正是 INCR 后、
+	// 写 TTL 前 Redis crash/fork 留下的孤儿形态。Allow 必须补挂 TTL，
+	// 否则该桶永久限流且无过期自愈。用 Set 预置计数 max-1（无过期参数）来复现。
+	stuckKey := "govault-share-test:" + stamp + ":stuck"
+	t.Cleanup(func() { _ = client.Del(context.Background(), stuckKey).Err() })
+	if err := client.Set(ctx, stuckKey, VerifyMaxAttempts-1, 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+	allowed, err = limiter.Allow(ctx, stuckKey, VerifyMaxAttempts, VerifyWindow)
+	if err != nil || !allowed {
+		t.Fatalf("stuck-key hit at the limit should be allowed, allowed=%v err=%v", allowed, err)
+	}
+	ttl, err = client.TTL(ctx, stuckKey).Result()
+	if err != nil || ttl <= 0 || ttl > VerifyWindow {
+		t.Fatalf("TTL-less key must get an expiry retroactively, ttl=%v err=%v", ttl, err)
 	}
 }

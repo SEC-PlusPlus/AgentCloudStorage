@@ -37,7 +37,16 @@ func RequireShareRateLimit(limiter shareAccessLimiter, kind string) gin.HandlerF
 
 		switch kind {
 		case "verify":
-			key = share.VerifyKey(c.Param("token"), c.ClientIP())
+			token := c.Param("token")
+			if token == "" {
+				// 空 token 说明路由没挂 :token（programmer error）：不查 limiter，直接 500。
+				slog.Error("share verify rate limit mounted without :token param")
+				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+					"error": "share rate limit misconfigured",
+				})
+				return
+			}
+			key = share.VerifyKey(token, c.ClientIP())
 			max = share.VerifyMaxAttempts
 			window = share.VerifyWindow
 			failClosed = true
