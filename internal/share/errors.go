@@ -6,6 +6,7 @@ var ErrShareNotFound = errors.New("share not found")
 var ErrPassword = errors.New("invalid password")
 var ErrNoPassword = errors.New("share does not require a password")
 var ErrTooManyShares = errors.New("too many active shares")
+var ErrPasswordTooLong = errors.New("share password too long")
 
 // ErrShareGone reports an existing share that is no longer usable, carrying
 // one of the Reason* constants for the visitor-facing 410 payload.

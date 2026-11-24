@@ -20,6 +20,10 @@ const (
 	maxActiveSharesPerOwner = 50
 	maxActiveSharesPerFile  = 20
 	maxPasswordRunes        = 64
+	// bcrypt receives at most 72 bytes; x/crypto v0.55 rejects longer input
+	// outright, so a spec-legal ≤64-rune multibyte password (e.g. 25 hanzi
+	// = 75 bytes) would otherwise fail Create with a 500-face error.
+	maxPasswordBytes        = 72
 	sharePasswordBcryptCost = 10
 
 	// tokenCreateAttempts = 1 initial try + up to 3 collision retries.
@@ -33,10 +37,12 @@ const (
 )
 
 // FileLookup is the share package's view of the file domain. Implementations
-// (file.Service gets the method in its own task) must answer the 404-face
-// outcome — file missing, foreign-owned, or not active (in trash) — with
-// ErrShareNotFound so owners and visitors never learn which of the three it
-// was (spec §3). Any other error means a real lookup failure.
+// (file.Service.GetActiveFile, composed in A5) answer the 404-face outcome —
+// file missing, foreign-owned, or not active (in trash) — with
+// file.ErrFileNotFound; share.ErrShareNotFound is also accepted as the same
+// signal for robustness. Any other error means a real lookup failure. The
+// share service maps both to its own visitor-safe errors, so no back-import
+// from file to share is needed (no import cycle).
 type FileLookup interface {
 	GetActiveFile(ctx context.Context, ownerID uint64, fileID uint64) (*file.File, error)
 }
@@ -71,13 +77,15 @@ func (s *Service) Create(
 	fileID uint64,
 	opts CreateOptions,
 ) (*Share, error) {
-	if opts.Password != "" && utf8.RuneCountInString(opts.Password) > maxPasswordRunes {
-		return nil, fmt.Errorf("share password must be at most %d characters", maxPasswordRunes)
+	if opts.Password != "" {
+		if utf8.RuneCountInString(opts.Password) > maxPasswordRunes || len(opts.Password) > maxPasswordBytes {
+			return nil, ErrPasswordTooLong
+		}
 	}
 
 	active, err := s.files.GetActiveFile(ctx, ownerID, fileID)
 	if err != nil {
-		if errors.Is(err, ErrShareNotFound) {
+		if isNotFoundFace(err) {
 			// Missing / foreign / trashed all wear the shared 404 face.
 			return nil, ErrShareNotFound
 		}
@@ -234,12 +242,19 @@ func (s *Service) usableNow(share *Share) error {
 func (s *Service) activeFile(ctx context.Context, share *Share) (*file.File, error) {
 	active, err := s.files.GetActiveFile(ctx, share.OwnerID, share.FileID)
 	if err != nil {
-		if errors.Is(err, ErrShareNotFound) {
+		if isNotFoundFace(err) {
 			return nil, &ErrShareGone{Reason: ReasonFileUnavailable}
 		}
 		return nil, fmt.Errorf("check shared file: %w", err)
 	}
 	return active, nil
+}
+
+// isNotFoundFace accepts both the file package's not-found sentinel (the
+// real FileLookup implementation's signal, cycle-free) and share's own
+// ErrShareNotFound as the same "no such active file" outcome.
+func isNotFoundFace(err error) bool {
+	return errors.Is(err, file.ErrFileNotFound) || errors.Is(err, ErrShareNotFound)
 }
 
 func newShareToken() (string, error) {

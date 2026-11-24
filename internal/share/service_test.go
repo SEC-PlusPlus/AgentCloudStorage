@@ -116,12 +116,14 @@ func (r *fakeRepository) PurgeByFileTx(tx *gorm.DB, fileID uint64) error {
 }
 
 // fakeFileLookup backs FileLookup with one seeded row. Per the interface
-// contract it answers ErrShareNotFound for missing/foreign/trashed files and
-// propagates lookupErr for real failures.
+// contract it answers file.ErrFileNotFound for missing/foreign/trashed files
+// (legacyNotFound switches to share.ErrShareNotFound to pin the robustness
+// branch) and propagates lookupErr for real failures.
 type fakeFileLookup struct {
-	seed      *file.File
-	seedFound bool
-	lookupErr error
+	seed           *file.File
+	seedFound      bool
+	lookupErr      error
+	legacyNotFound bool
 
 	calls int
 }
@@ -134,7 +136,10 @@ func (f *fakeFileLookup) GetActiveFile(_ context.Context, ownerID, fileID uint64
 		return nil, f.lookupErr
 	}
 	if !f.seedFound || f.seed == nil || f.seed.ID != fileID || f.seed.OwnerID != ownerID || f.seed.Status != file.StatusActive {
-		return nil, ErrShareNotFound
+		if f.legacyNotFound {
+			return nil, ErrShareNotFound
+		}
+		return nil, file.ErrFileNotFound
 	}
 	// Mutating seed between calls lets tests flip status after a share exists
 	// (e.g. Access re-check after a file moved to trash).
@@ -193,10 +198,13 @@ func TestCreateValidationMatrix(t *testing.T) {
 			wantErr: ErrShareNotFound,
 		},
 		{
-			name: "trashed file",
+			// Also pins the robustness branch: the legacy share.ErrShareNotFound
+			// from a lookup maps to the same 404 face as file.ErrFileNotFound.
+			name: "trashed file via legacy sentinel",
 			lookup: &fakeFileLookup{
-				seed:      &file.File{ID: 10, OwnerID: 1, Status: file.StatusDeleted},
-				seedFound: true,
+				seed:           &file.File{ID: 10, OwnerID: 1, Status: file.StatusDeleted},
+				seedFound:      true,
+				legacyNotFound: true,
 			},
 			wantErr: ErrShareNotFound,
 		},
@@ -230,10 +238,19 @@ func TestCreateValidationMatrix(t *testing.T) {
 			wantErrAny:   true,
 		},
 		{
-			name:       "password too long",
-			lookup:     &fakeFileLookup{seed: seed, seedFound: true},
-			password:   strings.Repeat("a", 65),
-			wantErrAny: true,
+			name:     "password over rune cap",
+			lookup:   &fakeFileLookup{seed: seed, seedFound: true},
+			password: strings.Repeat("a", 65),
+			wantErr:  ErrPasswordTooLong,
+		},
+		{
+			// 25 hanzi = 25 runes (legal per spec) but 75 UTF-8 bytes —
+			// bcrypt rejects >72, so the byte guard must produce a 400-face
+			// sentinel instead of a 500.
+			name:     "password over byte cap",
+			lookup:   &fakeFileLookup{seed: seed, seedFound: true},
+			password: strings.Repeat("汉", 25),
+			wantErr:  ErrPasswordTooLong,
 		},
 	}
 
@@ -268,11 +285,21 @@ func TestCreateValidationMatrix(t *testing.T) {
 		svc := NewService(repo, lookup, newTestTokenManager(t))
 
 		_, err := svc.Create(context.Background(), 1, 10, CreateOptions{Password: strings.Repeat("a", 65)})
-		if err == nil {
-			t.Fatalf("Create accepted 65-rune password")
+		if !errors.Is(err, ErrPasswordTooLong) {
+			t.Fatalf("Create error = %v, want ErrPasswordTooLong", err)
 		}
 		if lookup.calls != 0 || repo.createCalls != 0 {
 			t.Fatalf("Create hit deps lookup=%d create=%d, want 0 and 0", lookup.calls, repo.createCalls)
+		}
+	})
+
+	t.Run("password at both caps accepted", func(t *testing.T) {
+		repo := &fakeRepository{}
+		svc := NewService(repo, &fakeFileLookup{seed: seed, seedFound: true}, newTestTokenManager(t))
+
+		// 64 ASCII chars hit the rune cap and stay under the 72-byte cap.
+		if _, err := svc.Create(context.Background(), 1, 10, CreateOptions{Password: strings.Repeat("a", 64)}); err != nil {
+			t.Fatalf("Create at caps: %v", err)
 		}
 	})
 
@@ -398,6 +425,7 @@ func TestMetaStates(t *testing.T) {
 		share      *Share
 		seedFile   *file.File
 		seedFound  bool
+		legacy     bool
 		lookupErr  error
 		wantErr    error
 		wantReason string
@@ -445,6 +473,7 @@ func TestMetaStates(t *testing.T) {
 			name:       "file gone from disk",
 			share:      &Share{ID: 1, Token: "tok", OwnerID: 1, FileID: 10},
 			seedFound:  false,
+			legacy:     true, // share.ErrShareNotFound from lookup maps too
 			wantReason: ReasonFileUnavailable,
 		},
 		{
@@ -463,7 +492,7 @@ func TestMetaStates(t *testing.T) {
 					t.Fatalf("seed: %v", err)
 				}
 			}
-			lookup := &fakeFileLookup{seed: tc.seedFile, seedFound: tc.seedFound, lookupErr: tc.lookupErr}
+			lookup := &fakeFileLookup{seed: tc.seedFile, seedFound: tc.seedFound, lookupErr: tc.lookupErr, legacyNotFound: tc.legacy}
 			svc := NewService(repo, lookup, newTestTokenManager(t))
 
 			got, gotFile, err := svc.Meta(context.Background(), "tok")
