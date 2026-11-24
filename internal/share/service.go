@@ -218,6 +218,29 @@ func (s *Service) Revoke(ctx context.Context, ownerID uint64, shareID uint64) er
 	return s.shares.Revoke(ctx, ownerID, shareID)
 }
 
+// List is the owner view behind GET /shares: every share of the owner,
+// revoked included, newest first (repository order). No usability gate —
+// owners must see their revoked links.
+func (s *Service) List(ctx context.Context, ownerID uint64) ([]Share, error) {
+	return s.shares.ListByOwner(ctx, ownerID)
+}
+
+// RevokeByToken backs DELETE /shares/:token. The HTTP layer only ever holds
+// the token; Revoke keys by share ID, so this resolves the row first.
+// Unknown and foreign tokens both answer ErrShareNotFound (spec §3: the
+// owner 404 must not distinguish them); an already-revoked share returns
+// nil unchanged, keeping the DELETE idempotent at 204.
+func (s *Service) RevokeByToken(ctx context.Context, ownerID uint64, token string) error {
+	share, err := s.shares.GetByToken(ctx, token)
+	if err != nil {
+		return err
+	}
+	if share.OwnerID != ownerID {
+		return ErrShareNotFound
+	}
+	return s.shares.Revoke(ctx, ownerID, share.ID)
+}
+
 // IncrementDownload is pure statistics (v2: no limit gate). A nil error
 // means the database applied the increment; the caller logs any failure and
 // never blocks the download on it. Note: no existence semantics — unknown

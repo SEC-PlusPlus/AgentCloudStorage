@@ -8,6 +8,7 @@ import (
 	"PersonalCloudStorage/internal/folder"
 	"PersonalCloudStorage/internal/httpapi"
 	"PersonalCloudStorage/internal/knowledge"
+	"PersonalCloudStorage/internal/share"
 	"PersonalCloudStorage/internal/storage"
 	"PersonalCloudStorage/internal/upload"
 	"PersonalCloudStorage/internal/user"
@@ -142,6 +143,14 @@ func main() {
 		auth.NewRedisLoginLimiter(redisClient),
 	)
 
+	// 分享链接（spec §3–§6）：repo 兼任 file.Service 的级联 purger；
+	// Service 依赖 fileService 作为 FileLookup（GetActiveFile 404-face 契约）。
+	shareRepository := share.NewGORMRepository(db)
+	shareService := share.NewService(shareRepository, fileService, tokenManager)
+	fileService.SetSharePurger(shareRepository)
+	shareHandler := httpapi.NewShareHandler(shareService, fileService)
+	shareLimiter := share.NewRedisAccessLimiter(redisClient)
+
 	router := httpapi.NewRouter(
 		fileHandler,
 		folderHandler,
@@ -149,6 +158,8 @@ func main() {
 		authHandler,
 		tokenManager,
 		knowledgeHandler,
+		shareHandler,
+		shareLimiter,
 	)
 
 	if err := router.Run(cfg.Server.Addr); err != nil {

@@ -108,6 +108,7 @@ func (r *GORMRepository) HardDeleteWithQuota(
 	ctx context.Context,
 	ownerID uint64,
 	fileID uint64,
+	extra ...func(tx *gorm.DB) error,
 ) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var record File
@@ -142,6 +143,14 @@ func (r *GORMRepository) HardDeleteWithQuota(
 		}
 		if result.RowsAffected == 0 {
 			return ErrFileNotFound
+		}
+
+		// Hooks only run once the file row is provably gone, still in-tx:
+		// a failing hook rolls the whole permanent delete back (spec §5.4).
+		for _, hook := range extra {
+			if err := hook(tx); err != nil {
+				return err
+			}
 		}
 		return nil
 	})

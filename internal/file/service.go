@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type UploadInput struct {
@@ -72,10 +73,18 @@ type FolderAuthorizer interface {
 	EnsureOwned(ctx context.Context, ownerID uint64, folderID uint64) error
 }
 
+// SharePurger deletes the share rows referencing a file inside the caller's
+// transaction (spec §5.4 cascade). The file package keeps no import on
+// internal/share — main.go injects *share.GORMRepository via SetSharePurger.
+type SharePurger interface {
+	PurgeByFileTx(tx *gorm.DB, fileID uint64) error
+}
+
 type Service struct {
-	storage storage.ObjectStorage
-	repo    Repository
-	folders FolderAuthorizer
+	storage     storage.ObjectStorage
+	repo        Repository
+	folders     FolderAuthorizer
+	sharePurger SharePurger
 }
 
 func NewService(objectStorage storage.ObjectStorage, repo Repository, folders FolderAuthorizer) *Service {
@@ -84,6 +93,41 @@ func NewService(objectStorage storage.ObjectStorage, repo Repository, folders Fo
 		repo:    repo,
 		folders: folders,
 	}
+}
+
+// SetSharePurger wires the spec §5.4 cascade; until it is called, permanent
+// deletion behaves exactly as before (no extra transaction hooks).
+func (s *Service) SetSharePurger(purger SharePurger) {
+	s.sharePurger = purger
+}
+
+// GetActiveFile answers share.FileLookup (spec §4): the record only when it
+// exists, belongs to ownerID and is active. Missing, foreign and trashed all
+// return ErrFileNotFound — the 404 face the share layer maps onward.
+// repo.GetByID already filters owner_id + status = active.
+func (s *Service) GetActiveFile(ctx context.Context, ownerID uint64, fileID uint64) (*File, error) {
+	if ownerID == 0 || fileID == 0 {
+		return nil, ErrFileNotFound
+	}
+	return s.repo.GetByID(ctx, ownerID, fileID)
+}
+
+// DownloadByKey streams an object straight from storage with NO owner check —
+// 仅供分享路径：only share_handler may call it, and only after the share
+// token/password/status validation the ownership-heavy Download cannot skip.
+func (s *Service) DownloadByKey(ctx context.Context, key string) (*DownloadResult, error) {
+	if strings.TrimSpace(key) == "" {
+		return nil, errors.New("object key is required")
+	}
+	reader, info, err := s.storage.Get(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("open shared file content:%w", err)
+	}
+	return &DownloadResult{
+		ContentType: info.ContentType,
+		Size:        info.Size,
+		Reader:      reader,
+	}, nil
 }
 
 func (s *Service) Upload(ctx context.Context, input UploadInput) (created *File, retErr error) {
@@ -288,7 +332,19 @@ func (s *Service) PermanentDelete(ctx context.Context, ownerID uint64, fileID ui
 	if err := s.storage.Delete(deleteCtx, record.ObjectKey); err != nil {
 		return fmt.Errorf("delete object from storage: %w", err)
 	}
-	if err := s.repo.HardDeleteWithQuota(deleteCtx, ownerID, fileID); err != nil {
+
+	// spec §5.4 cascade: share links die with their object, purged inside the
+	// same transaction as the row/quota delete. extra is a slice so the
+	// B-track blob-release hook can join it later without reshaping callers.
+	var extra []func(tx *gorm.DB) error
+	if s.sharePurger != nil {
+		purger := s.sharePurger
+		extra = append(extra, func(tx *gorm.DB) error {
+			return purger.PurgeByFileTx(tx, fileID)
+		})
+	}
+
+	if err := s.repo.HardDeleteWithQuota(deleteCtx, ownerID, fileID, extra...); err != nil {
 		return fmt.Errorf("delete file metadata: %w", err)
 	}
 	return nil

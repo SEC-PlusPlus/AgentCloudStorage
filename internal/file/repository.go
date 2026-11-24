@@ -1,6 +1,10 @@
 package file
 
-import "context"
+import (
+	"context"
+
+	"gorm.io/gorm"
+)
 
 type Repository interface {
 	Create(ctx context.Context, file *File) error
@@ -9,7 +13,11 @@ type Repository interface {
 	SoftDelete(ctx context.Context, ownerID uint64, fileID uint64) error
 	Restore(ctx context.Context, ownerID uint64, fileID uint64) error
 	GetDeletedByID(ctx context.Context, ownerID uint64, fileID uint64) (*File, error)
-	HardDeleteWithQuota(ctx context.Context, ownerID uint64, fileID uint64) error
+	// HardDeleteWithQuota removes the row and its quota atomically. extra
+	// hooks (share purge today, blob release later) run INSIDE that same
+	// transaction after the row delete succeeded; a hook error aborts the
+	// whole delete.
+	HardDeleteWithQuota(ctx context.Context, ownerID uint64, fileID uint64, extra ...func(tx *gorm.DB) error) error
 	ListByFolderAndStatus(ctx context.Context, ownerID uint64, folderID uint64, status Status, limit int, offset int) ([]File, int64, error)
 	Move(ctx context.Context, ownerID uint64, fileID uint64, targetFolderID uint64) error
 	Rename(ctx context.Context, ownerID uint64, fileID uint64, newName string) error

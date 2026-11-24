@@ -253,7 +253,7 @@ func TestNewRouterTrustsOnlyLoopbackProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router := NewRouter(nil, nil, nil, nil, manager, nil)
+	router := NewRouter(nil, nil, nil, nil, manager, nil, nil, nil)
 	router.GET("/__client-ip", func(c *gin.Context) {
 		c.String(http.StatusOK, "%s", c.ClientIP())
 	})

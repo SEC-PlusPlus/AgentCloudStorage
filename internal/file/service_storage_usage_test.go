@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"gorm.io/gorm"
 )
 
 // usageRepositoryStub implements Repository with the quota/usage methods backed
@@ -42,7 +44,7 @@ func (*usageRepositoryStub) GetDeletedByID(context.Context, uint64, uint64) (*Fi
 	return nil, errors.New("unexpected GetDeletedByID call")
 }
 
-func (*usageRepositoryStub) HardDeleteWithQuota(context.Context, uint64, uint64) error {
+func (*usageRepositoryStub) HardDeleteWithQuota(context.Context, uint64, uint64, ...func(*gorm.DB) error) error {
 	return errors.New("unexpected HardDeleteWithQuota call")
 }
 

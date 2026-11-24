@@ -71,8 +71,16 @@ func (r *fakeRepository) GetByID(_ context.Context, shareID uint64) (*Share, err
 	return nil, ErrShareNotFound
 }
 
-func (r *fakeRepository) ListByOwner(context.Context, uint64) ([]Share, error) {
-	return nil, errors.New("unexpected ListByOwner call")
+func (r *fakeRepository) ListByOwner(_ context.Context, ownerID uint64) ([]Share, error) {
+	// Newest first (reverse insertion), mirroring the GORM order clause.
+	var out []Share
+	for i := len(r.shares) - 1; i >= 0; i-- {
+		if r.shares[i].OwnerID == ownerID {
+			copied := *r.shares[i]
+			out = append(out, copied)
+		}
+	}
+	return out, nil
 }
 
 func (r *fakeRepository) CountActiveByOwner(context.Context, uint64) (int, error) {
@@ -777,5 +785,85 @@ func TestRevokeAndIncrementPassthrough(t *testing.T) {
 	repo.incrementErr = errors.New("db boom")
 	if err := svc.IncrementDownload(context.Background(), seedShare.ID); err == nil {
 		t.Fatalf("IncrementDownload swallowed repository error")
+	}
+}
+
+// TestListReturnsOwnerShares newest-first, revoked included (spec §3 GET /shares).
+func TestListReturnsOwnerShares(t *testing.T) {
+	repo := &fakeRepository{}
+	svc := NewService(repo, &fakeFileLookup{seed: activeSeedFile(), seedFound: true}, newTestTokenManager(t))
+
+	first, err := svc.Create(context.Background(), 1, 10, CreateOptions{})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	second, err := svc.Create(context.Background(), 1, 10, CreateOptions{})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	// Foreign owner's row goes in directly (the fake FileLookup is owner-pinned).
+	repo.shares = append(repo.shares, &Share{ID: 900, OwnerID: 2, FileID: 10, Token: "foreign-token"})
+
+	shares, err := svc.List(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(shares) != 2 {
+		t.Fatalf("List length = %d, want 2 (other owner excluded)", len(shares))
+	}
+	if shares[0].ID != second.ID || shares[1].ID != first.ID {
+		t.Fatalf("List order = [%d,%d], want newest first [%d,%d]",
+			shares[0].ID, shares[1].ID, second.ID, first.ID)
+	}
+
+	// Revoking stays visible to the owner view.
+	if err := svc.RevokeByToken(context.Background(), 1, first.Token); err != nil {
+		t.Fatalf("RevokeByToken owner path: %v", err)
+	}
+	shares, err = svc.List(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("List after revoke: %v", err)
+	}
+	if len(shares) != 2 || shares[1].RevokedAt == nil {
+		t.Fatalf("revoked share missing from owner list: %+v", shares)
+	}
+}
+
+// TestRevokeByTokenFaces pins the owner 404 indistinguishability and the
+// idempotent 204 path backing DELETE /shares/:token (spec §3).
+func TestRevokeByTokenFaces(t *testing.T) {
+	repo := &fakeRepository{}
+	svc := NewService(repo, &fakeFileLookup{seed: activeSeedFile(), seedFound: true}, newTestTokenManager(t))
+
+	owned, err := svc.Create(context.Background(), 1, 10, CreateOptions{})
+	if err != nil {
+		t.Fatalf("seed create: %v", err)
+	}
+	// Foreign owner's row goes in directly (the fake FileLookup is owner-pinned).
+	foreign := &Share{ID: 900, OwnerID: 2, FileID: 10, Token: "foreign-token"}
+	repo.shares = append(repo.shares, foreign)
+
+	// Foreign token: 404 face and the repository is never asked to revoke.
+	revokeCallsBefore := repo.revokeCalls
+	if err := svc.RevokeByToken(context.Background(), 1, foreign.Token); !errors.Is(err, ErrShareNotFound) {
+		t.Fatalf("foreign RevokeByToken = %v, want ErrShareNotFound", err)
+	}
+	if repo.revokeCalls != revokeCallsBefore {
+		t.Fatalf("foreign revoke reached repository (%d calls)", repo.revokeCalls)
+	}
+
+	if err := svc.RevokeByToken(context.Background(), 1, "no-such-token"); !errors.Is(err, ErrShareNotFound) {
+		t.Fatalf("unknown RevokeByToken = %v, want ErrShareNotFound", err)
+	}
+
+	if err := svc.RevokeByToken(context.Background(), 1, owned.Token); err != nil {
+		t.Fatalf("owner RevokeByToken: %v", err)
+	}
+	if repo.shares[0].RevokedAt == nil {
+		t.Fatalf("RevokeByToken did not mark the share revoked")
+	}
+	// Already revoked stays a no-op → handler answers 204 (idempotent DELETE).
+	if err := svc.RevokeByToken(context.Background(), 1, owned.Token); err != nil {
+		t.Fatalf("second RevokeByToken = %v, want nil (idempotent)", err)
 	}
 }
