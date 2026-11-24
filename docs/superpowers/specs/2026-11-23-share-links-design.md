@@ -115,7 +115,7 @@ type Repository interface {
 
 ## 8. 测试与验收
 - 单测：`share/service_test.go`（fake repo/FileLookup：创建校验矩阵、过期/撤销判定、verify 成功失败）；`gorm_repository` 的 `TryIncrementDownload` 并发用 sqlite 或 skip-integration 标注（对齐仓库现状：repo 层无单测先例则允许 e2e 覆盖）。
-- handler 表驱动：`statusForShareError` 全映射 + verify 429/401/404。
+- handler 表驱动：`statusForShareError` 全映射 + verify 429/401/404。（v2 注：方法名统一 `IncrementDownload`，v1 的 TryIncrementDownload 命名已废）
 - JWT scope 互斥双向测试（登录 token 打 share 端点 401，反之亦然）。
 - 真机冒烟（PowerShell）：登录→分享带密码→访客 meta→错密 5 次→第 6 次 429→对密→下载 200（download_count+1）→撤销→meta 410 reason=revoked；**验收矩阵照 §3 v2 状态码表逐格打勾**。
 
