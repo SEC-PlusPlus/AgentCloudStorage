@@ -43,6 +43,19 @@ func (r *GORMRepository) GetByToken(ctx context.Context, token string) (*Share, 
 	return &record, nil
 }
 
+func (r *GORMRepository) GetByID(ctx context.Context, shareID uint64) (*Share, error) {
+	var record Share
+
+	err := r.db.WithContext(ctx).Where("id = ?", shareID).First(&record).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrShareNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get share by id: %w", err)
+	}
+	return &record, nil
+}
+
 func (r *GORMRepository) ListByOwner(ctx context.Context, ownerID uint64) ([]Share, error) {
 	var shares []Share
 
