@@ -120,5 +120,5 @@ type Repository interface {
 - 真机冒烟（PowerShell）：登录→分享带密码→访客 meta→错密 5 次→第 6 次 429→对密→下载 200（download_count+1）→撤销→meta 410 reason=revoked；**验收矩阵照 §3 v2 状态码表逐格打勾**。
 
 ## 9. 部署与迁移 runbook（builder-check 裁定新增）
-- migration 文件命名沿用 golang-migrate 格式，但**现仓库实际加载方式只有 MySQL 容器 initdb**。生产库（8.148.23.240，已有数据）执行方式：`docker exec -i govault-mysql mysql -ugovault -p<pwd> govault < migrations/000006_create_share_links.up.sql`，随后 `SHOW TABLES LIKE 'share_links'` + `DESCRIBE` 验证。此 runbook 写入 `deploy/README`（新建，含"每次新 migration 的手动应用规程"），**这是全仓库第一次把 migration 应用流程成文**——秒传线的 000007/000008 直接复用。
+- migration 文件命名沿用 golang-migrate 格式，但**现仓库实际加载方式只有 MySQL 容器 initdb**。生产库（8.148.23.240，已有数据）执行方式：`docker exec -i <mysql-container> mysql -ugovault -p<pwd> govault < migrations/000006_create_share_links.up.sql`（`<mysql-container>` 以 `docker ps --format '{{.Names}}' | grep -i mysql` 实测为准：dev=`govault-mysql`（手工 run 的开发容器）/ prod=`agentcloudstorage-mysql-1`（compose 项目名 `agentcloudstorage`，无 container_name 覆盖），不要照抄字面量），随后 `SHOW TABLES LIKE 'share_links'` + `DESCRIBE` 验证。此 runbook 写入 `deploy/README`（新建，含"每次新 migration 的手动应用规程"），**这是全仓库第一次把 migration 应用流程成文**——秒传线的 000007/000008 直接复用。
 - 应用顺序硬规则：先 migration 后代码（新列/新表均可空/增量，旧代码向前兼容）。
