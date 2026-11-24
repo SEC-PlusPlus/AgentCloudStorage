@@ -12,6 +12,14 @@ import (
 
 var ErrInvalidToken = errors.New("invalid access token")
 
+// ShareTokenTTL is the fixed lifetime of share-access tokens (spec §2.2).
+const ShareTokenTTL = 15 * time.Minute
+
+const (
+	scopeUser  = "user"
+	scopeShare = "share"
+)
+
 type TokenConfig struct {
 	Secret    string
 	Issuer    string
@@ -20,6 +28,7 @@ type TokenConfig struct {
 
 type AccessTokenClaims struct {
 	jwt.RegisteredClaims
+	Scope string `json:"scope,omitempty"`
 }
 
 type TokenManager struct {
@@ -69,6 +78,7 @@ func (m *TokenManager) GenerateAccessToken(userID uint64) (string, time.Time, er
 			NotBefore: jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 		},
+		Scope: scopeUser,
 	}
 
 	token := jwt.NewWithClaims(
@@ -121,6 +131,13 @@ func (m *TokenManager) ParseAccessToken(
 		return 0, ErrInvalidToken
 	}
 
+	// Legacy tokens issued before share scopes carry no scope claim and
+	// remain valid as user scope (spec §2.2 存量兼容); share tokens never
+	// unlock user endpoints.
+	if claims.Scope != "" && claims.Scope != scopeUser {
+		return 0, ErrInvalidToken
+	}
+
 	userID, err := strconv.ParseUint(
 		claims.Subject,
 		10,
@@ -131,4 +148,94 @@ func (m *TokenManager) ParseAccessToken(
 	}
 
 	return userID, nil
+}
+
+// IssueShareToken signs a short-lived share-access token for shareID.
+func (m *TokenManager) IssueShareToken(shareID uint64) (string, error) {
+	if shareID == 0 {
+		return "", errors.New(
+			"share id is required",
+		)
+	}
+
+	now := time.Now().UTC()
+	expiresAt := now.Add(ShareTokenTTL)
+
+	claims := AccessTokenClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    m.issuer,
+			Subject:   strconv.FormatUint(shareID, 10),
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+		},
+		Scope: scopeShare,
+	}
+
+	token := jwt.NewWithClaims(
+		jwt.SigningMethodHS256,
+		claims,
+	)
+
+	tokenString, err := token.SignedString(m.secret)
+	if err != nil {
+		return "", fmt.Errorf(
+			"sign share token: %w",
+			err,
+		)
+	}
+
+	return tokenString, nil
+}
+
+// ParseShareToken validates a share-access token and returns its share ID.
+// Only tokens with scope=="share" are accepted.
+func (m *TokenManager) ParseShareToken(
+	tokenString string,
+) (uint64, error) {
+	tokenString = strings.TrimSpace(tokenString)
+	if tokenString == "" {
+		return 0, ErrInvalidToken
+	}
+
+	claims := &AccessTokenClaims{}
+
+	token, err := jwt.ParseWithClaims(
+		tokenString,
+		claims,
+		func(token *jwt.Token) (any, error) {
+			return m.secret, nil
+		},
+		jwt.WithValidMethods([]string{
+			jwt.SigningMethodHS256.Alg(),
+		}),
+		jwt.WithIssuer(m.issuer),
+		jwt.WithExpirationRequired(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"%w: %v",
+			ErrInvalidToken,
+			err,
+		)
+	}
+
+	if token == nil || !token.Valid {
+		return 0, ErrInvalidToken
+	}
+
+	if claims.Scope != scopeShare {
+		return 0, ErrInvalidToken
+	}
+
+	shareID, err := strconv.ParseUint(
+		claims.Subject,
+		10,
+		64,
+	)
+	if err != nil || shareID == 0 {
+		return 0, ErrInvalidToken
+	}
+
+	return shareID, nil
 }
