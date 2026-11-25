@@ -368,4 +368,91 @@ func (r *GORMRepository) CreateWithQuota(
 	})
 }
 
+func (r *GORMRepository) FindBlob(ctx context.Context, sha256 string) (*Object, error) {
+	var obj Object
+	err := r.db.WithContext(ctx).Where("sha256 = ?", sha256).First(&obj).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrBlobNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find blob: %w", err)
+	}
+	return &obj, nil
+}
+
+// AcquireBlob inserts-or-adopts the objects row for sha256 and returns it
+// locked for the remainder of tx, with refcount already incremented (new row:
+// 1, existing row: +1). created reports whether this call inserted the row.
+//
+// Two-step per spec §5: INSERT IGNORE first, then SELECT ... FOR UPDATE.
+// RowsAffected is trustworthy for "created" here and only here: the go-sql-
+// driver reports changed rows, so INSERT IGNORE returns exactly 1 when the
+// row was inserted and 0 when the duplicate was ignored — an unambiguous
+// boolean. The usual upsert alternative is not: ON DUPLICATE KEY UPDATE would
+// report 1/2/0 depending on whether the duplicate update changes anything,
+// which cannot distinguish "pre-existing" from "inserted".
+func (r *GORMRepository) AcquireBlob(tx *gorm.DB, sha256, contentType string, size int64) (*Object, bool, error) {
+	result := tx.Clauses(clause.Insert{Modifier: "IGNORE"}).Create(&Object{
+		Sha256:      sha256,
+		ObjectKey:   BlobObjectKey(sha256),
+		ContentType: contentType,
+		Size:        size,
+		Refcount:    1,
+	})
+	if result.Error != nil {
+		return nil, false, fmt.Errorf("acquire blob insert: %w", result.Error)
+	}
+	created := result.RowsAffected == 1
+
+	// Lock the row (or block until the racing inserter commits) so the
+	// refcount read-back and increment are serialised against ReleaseBlob.
+	var obj Object
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("sha256 = ?", sha256).First(&obj).Error
+	if err != nil {
+		return nil, false, fmt.Errorf("acquire blob lock: %w", err)
+	}
+
+	if !created {
+		if err := tx.Model(&Object{}).Where("sha256 = ?", sha256).
+			UpdateColumn("refcount", gorm.Expr("refcount + 1")).Error; err != nil {
+			return nil, false, fmt.Errorf("acquire blob refcount: %w", err)
+		}
+		obj.Refcount++
+	}
+	return &obj, created, nil
+}
+
+// ReleaseBlob decrements the objects row for sha256. When refcount hits zero
+// the row is deleted and (objectKey, true) is returned so the caller can hand
+// the key to the delayed physical GC (spec §1.4); otherwise (objectKey, false).
+// A row that is already gone (concurrent release raced to zero, or never
+// existed) is a no-op: ("", false, nil) — releases are idempotent per file row.
+func (r *GORMRepository) ReleaseBlob(tx *gorm.DB, sha256 string) (string, bool, error) {
+	result := tx.Model(&Object{}).Where("sha256 = ?", sha256).
+		UpdateColumn("refcount", gorm.Expr("refcount - 1"))
+	if result.Error != nil {
+		return "", false, fmt.Errorf("release blob: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return "", false, nil
+	}
+
+	var obj Object
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("sha256 = ?", sha256).First(&obj).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read back blob refcount: %w", err)
+	}
+	if obj.Refcount > 0 {
+		return obj.ObjectKey, false, nil
+	}
+
+	if err := tx.Where("sha256 = ?", sha256).Delete(&Object{}).Error; err != nil {
+		return "", false, fmt.Errorf("delete zero-refcount blob: %w", err)
+	}
+	return obj.ObjectKey, true, nil
+}
+
 var _ Repository = (*GORMRepository)(nil)

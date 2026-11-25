@@ -123,6 +123,18 @@ func (r *cascadeRepositoryStub) CreateWithQuota(context.Context, *File, int64) e
 	return errors.New("unexpected CreateWithQuota call")
 }
 
+func (r *cascadeRepositoryStub) FindBlob(context.Context, string) (*Object, error) {
+	return nil, ErrBlobNotFound
+}
+
+func (r *cascadeRepositoryStub) AcquireBlob(*gorm.DB, string, string, int64) (*Object, bool, error) {
+	return nil, false, errors.New("unexpected AcquireBlob call")
+}
+
+func (r *cascadeRepositoryStub) ReleaseBlob(*gorm.DB, string) (string, bool, error) {
+	return "", false, errors.New("unexpected ReleaseBlob call")
+}
+
 // cascadeStorageStub only honors Get/Delete; Put/Stat fail loudly.
 type cascadeStorageStub struct {
 	content     map[string]string

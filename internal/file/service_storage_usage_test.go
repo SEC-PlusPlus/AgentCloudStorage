@@ -90,6 +90,18 @@ func (*usageRepositoryStub) CreateWithQuota(context.Context, *File, int64) error
 	return errors.New("unexpected CreateWithQuota call")
 }
 
+func (*usageRepositoryStub) FindBlob(context.Context, string) (*Object, error) {
+	return nil, ErrBlobNotFound
+}
+
+func (*usageRepositoryStub) AcquireBlob(*gorm.DB, string, string, int64) (*Object, bool, error) {
+	return nil, false, errors.New("unexpected AcquireBlob call")
+}
+
+func (*usageRepositoryStub) ReleaseBlob(*gorm.DB, string) (string, bool, error) {
+	return "", false, errors.New("unexpected ReleaseBlob call")
+}
+
 func TestStorageUsageReturnsUsedAndQuotaBytes(t *testing.T) {
 	repo := &usageRepositoryStub{usedBytes: 1234, quotaBytes: 56789}
 	svc := NewService(nil, repo, nil)

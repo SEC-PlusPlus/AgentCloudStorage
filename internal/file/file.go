@@ -13,6 +13,7 @@ type File struct {
 	FolderID     uint64     `gorm:"column:folder_id"`
 	OriginalName string     `gorm:"column:original_name"`
 	ObjectKey    string     `gorm:"column:object_key"`
+	Sha256       *string    `gorm:"column:sha256"`
 	Size         int64      `gorm:"column:size"`
 	ContentType  string     `gorm:"column:content_type"`
 	ETag         string     `gorm:"column:etag"`

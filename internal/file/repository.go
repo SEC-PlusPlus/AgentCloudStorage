@@ -28,4 +28,12 @@ type Repository interface {
 	ReserveQuota(ctx context.Context, ownerID uint64, size int64) error
 	ReleaseQuota(ctx context.Context, ownerID uint64, size int64) error
 	CreateWithQuota(ctx context.Context, file *File, reservedSize int64) error
+
+	// Blob primitives (instant-upload dedup, spec §5). AcquireBlob and
+	// ReleaseBlob are transaction-scoped: they take the caller's *gorm.DB so
+	// the refcount move commits atomically with the files-row write.
+	// FindBlob is a plain read and answers ErrBlobNotFound on a miss.
+	FindBlob(ctx context.Context, sha256 string) (*Object, error)
+	AcquireBlob(tx *gorm.DB, sha256, contentType string, size int64) (*Object, bool, error)
+	ReleaseBlob(tx *gorm.DB, sha256 string) (objectKey string, gone bool, err error)
 }
