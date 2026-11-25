@@ -19,6 +19,12 @@ type ObjectStorage interface {
 	Get(ctx context.Context, key string) (io.ReadCloser, ObjectInfo, error)
 	Stat(ctx context.Context, key string) (ObjectInfo, error)
 	Delete(ctx context.Context, key string) error
+
+	// Copy performs a server-side copy of srcKey to dstKey inside the same
+	// bucket — no object bytes ever round-trip through this client. Dedup
+	// uses it to promote a tmp upload key to the content-addressed
+	// blobs/<sha256> placement. It returns an error when srcKey is missing.
+	Copy(ctx context.Context, srcKey, dstKey string) error
 }
 
 type UploadedPart struct {

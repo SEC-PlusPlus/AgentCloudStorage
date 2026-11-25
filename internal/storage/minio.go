@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sort"
 	"strings"
@@ -102,6 +103,19 @@ func (s *MinIOStorage) Delete(ctx context.Context, key string) error {
 	return s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{})
 }
 
+// Copy 走 MinIO 服务端复制（x-amz-copy-source），字节不经过本客户端。
+// src 不存在时返回包装了 MinIO NoSuchKey 的错误。
+func (s *MinIOStorage) Copy(ctx context.Context, srcKey, dstKey string) error {
+	_, err := s.client.CopyObject(ctx,
+		minio.CopyDestOptions{Bucket: s.bucket, Object: dstKey},
+		minio.CopySrcOptions{Bucket: s.bucket, Object: srcKey},
+	)
+	if err != nil {
+		return fmt.Errorf("copy object: %w", err)
+	}
+	return nil
+}
+
 func (s *MinIOStorage) StartMultipart(ctx context.Context, key string, contentType string) (string, error) {
 	core := minio.Core{Client: s.client}
 	return core.NewMultipartUpload(ctx, s.bucket, key, minio.PutObjectOptions{ContentType: contentType})
@@ -166,6 +180,6 @@ func (s *MinIOStorage) AbortMultipart(ctx context.Context, key string, uploadID 
 	return err
 }
 
-// 编译期检查: MinIOStorage 是否完整实现了 ObjectStorage 的四个方法。
+// 编译期检查: MinIOStorage 是否完整实现了 ObjectStorage 与 MultipartStorage。
 var _ ObjectStorage = (*MinIOStorage)(nil)
 var _ MultipartStorage = (*MinIOStorage)(nil)

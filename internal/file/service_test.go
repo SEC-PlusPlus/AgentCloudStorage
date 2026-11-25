@@ -135,7 +135,7 @@ func (r *cascadeRepositoryStub) ReleaseBlob(*gorm.DB, string) (string, bool, err
 	return "", false, errors.New("unexpected ReleaseBlob call")
 }
 
-// cascadeStorageStub only honors Get/Delete; Put/Stat fail loudly.
+// cascadeStorageStub honors Get/Delete/Copy; Put/Stat fail loudly.
 type cascadeStorageStub struct {
 	content     map[string]string
 	deleteKeys  []string
@@ -172,6 +172,19 @@ func (s *cascadeStorageStub) Stat(context.Context, string) (storage.ObjectInfo, 
 func (s *cascadeStorageStub) Delete(_ context.Context, key string) error {
 	s.deleteKeys = append(s.deleteKeys, key)
 	return s.deleteErr
+}
+
+// Copy mirrors Get's lookup: missing src returns the same "object missing"
+// error, and dst is a value copy of the stored string (Go strings are
+// immutable, so dst never shares mutable state with src). Size/ContentType
+// need no bookkeeping — Get(dst) derives them from the stored bytes.
+func (s *cascadeStorageStub) Copy(_ context.Context, srcKey, dstKey string) error {
+	body, ok := s.content[srcKey]
+	if !ok {
+		return errors.New("object missing")
+	}
+	s.content[dstKey] = body
+	return nil
 }
 
 // recordingPurger captures the fileIDs handed to the share cascade hook.
@@ -307,5 +320,56 @@ func TestDownloadByKeySkipsOwnerChecks(t *testing.T) {
 	store.getErr = errors.New("minio down")
 	if _, err := svc.DownloadByKey(context.Background(), "users/9/foreign"); err == nil {
 		t.Error("storage failure must surface")
+	}
+}
+
+// TestStorageStubCopyContract pins the ObjectStorage.Copy in-memory contract
+// every fake must honor: copy existing key serves identical bytes at dst,
+// mutating src afterwards does not change dst (deep copy), and copying a
+// missing src fails with the fake's not-found error.
+func TestStorageStubCopyContract(t *testing.T) {
+	store := &cascadeStorageStub{
+		content:     map[string]string{"users/1/tmp-abc": "hello-bytes"},
+		contentType: "application/octet-stream",
+	}
+
+	if err := store.Copy(context.Background(), "users/1/tmp-abc", "blobs/sha256-deadbeef"); err != nil {
+		t.Fatalf("Copy: %v", err)
+	}
+
+	body, info, err := store.Get(context.Background(), "blobs/sha256-deadbeef")
+	if err != nil {
+		t.Fatalf("Get(dst): %v", err)
+	}
+	got, readErr := io.ReadAll(body)
+	_ = body.Close()
+	if readErr != nil {
+		t.Fatalf("ReadAll(dst): %v", readErr)
+	}
+	if string(got) != "hello-bytes" {
+		t.Fatalf("dst bytes = %q, want %q", got, "hello-bytes")
+	}
+	if info.Size != int64(len("hello-bytes")) || info.ContentType != "application/octet-stream" {
+		t.Fatalf("dst info = %+v, want size %d / octet-stream", info, len("hello-bytes"))
+	}
+
+	// Deep copy: later mutation of the source must not be visible at dst.
+	store.content["users/1/tmp-abc"] = "mutated"
+	body2, _, err2 := store.Get(context.Background(), "blobs/sha256-deadbeef")
+	if err2 != nil {
+		t.Fatalf("Get(dst) after src mutation: %v", err2)
+	}
+	got2, readErr2 := io.ReadAll(body2)
+	_ = body2.Close()
+	if readErr2 != nil {
+		t.Fatalf("ReadAll(dst) after src mutation: %v", readErr2)
+	}
+	if string(got2) != "hello-bytes" {
+		t.Fatalf("dst bytes after src mutation = %q, want unchanged %q", got2, "hello-bytes")
+	}
+
+	// Missing src → error, mirroring Get's not-found style.
+	if err := store.Copy(context.Background(), "users/1/missing", "blobs/x"); err == nil {
+		t.Fatal("Copy(missing src) = nil, want error")
 	}
 }
