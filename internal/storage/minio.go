@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"sort"
 	"strings"
@@ -104,16 +103,15 @@ func (s *MinIOStorage) Delete(ctx context.Context, key string) error {
 }
 
 // Copy 走 MinIO 服务端复制（x-amz-copy-source），字节不经过本客户端。
-// src 不存在时返回包装了 MinIO NoSuchKey 的错误。
+// 错误原样返回（同 Put/Get/Stat/Delete）：本文件判定错误的惯例是
+// minio.ToErrorResponse(err)，它是裸类型断言、不解包 %w——一旦 wrap，
+// NoSuchKey 判定会退化成零值；保持裸错误让两种检法都可用。
 func (s *MinIOStorage) Copy(ctx context.Context, srcKey, dstKey string) error {
 	_, err := s.client.CopyObject(ctx,
 		minio.CopyDestOptions{Bucket: s.bucket, Object: dstKey},
 		minio.CopySrcOptions{Bucket: s.bucket, Object: srcKey},
 	)
-	if err != nil {
-		return fmt.Errorf("copy object: %w", err)
-	}
-	return nil
+	return err
 }
 
 func (s *MinIOStorage) StartMultipart(ctx context.Context, key string, contentType string) (string, error) {
