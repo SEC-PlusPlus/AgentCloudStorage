@@ -8,6 +8,7 @@ import { AppLayout } from './AppLayout'
 import { canAccess, type RouteGuardMeta } from './guard'
 import { FilesRoute } from './FilesRoute'
 import { LoginRoute } from './LoginRoute'
+import { ShareRoute } from './ShareRoute'
 import { TrashRoute } from './TrashRoute'
 
 // 用闭包携带 meta 而非 v7 的 to.meta：v8 middleware args 不含 handle/meta，
@@ -25,6 +26,12 @@ export const routeObjects: RouteObject[] = [
     path: '/login',
     element: <LoginRoute />,
     middleware: [authGuard({ guestOnly: true })],
+  },
+  {
+    // 访客下载页（Task A7，spec §1.2）：公开路由免登录直达，顶层挂载不进 AppLayout。
+    path: '/d/:token',
+    element: <ShareRoute />,
+    middleware: [authGuard({ public: true })],
   },
   {
     path: '/',
