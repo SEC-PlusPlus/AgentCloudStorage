@@ -8,7 +8,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useParams } from 'react-router'
 import { ApiError } from '@/api/client'
-import { getShareMeta, shareDownloadUrl, verifySharePassword, ShareMetaError, type ShareMeta } from '@/api/shares'
+import { getShareMeta, shareDownloadUrl, verifySharePassword, SharePublicError, type ShareMeta } from '@/api/shares'
 import { Button } from '@/components/glinui/components/button'
 import { GlassCard, GlassCardContent, GlassCardHeader } from '@/components/glinui/components/glass-card'
 import { Heading } from '@/components/glinui/components/heading'
@@ -30,14 +30,19 @@ const GONE_TITLE: Record<string, string> = {
   file_unavailable: '文件暂不可用',
 }
 
+// meta 与 verify 共用（fix 评审 MINOR-1/2）：两个公开端点按 spec §3 均可回 404/410/429，
+// SharePublicError 透传 status+reason，这里统一映射成失效卡片文案。
 function metaFailure(error: unknown): ViewState {
-  if (error instanceof ShareMetaError) {
+  if (error instanceof SharePublicError) {
     if (error.status === 404) {
       return { stage: 'failed', title: '链接不存在', description: '链接可能不完整，请向分享者重新获取。' }
     }
     if (error.status === 410) {
       // 理由：reason 为 null/未知取值时兜底「链接已失效」（brief Step 3 的 410 总文案）。
       return { stage: 'failed', title: GONE_TITLE[error.reason ?? ''] ?? '链接已失效', description: '该分享链接当前不可用。' }
+    }
+    if (error.status === 429) {
+      return { stage: 'failed', title: '访问过于频繁，请稍后重试', description: '稍等片刻后刷新本页即可。' }
     }
     if (error.status === 0) {
       return { stage: 'failed', title: '无法连接服务器', description: '请检查网络后刷新重试。' }
@@ -81,8 +86,15 @@ export function ShareRoute() {
       setShareToken(result.share_token) // share JWT 只存组件态：不落 sessionStorage/localStorage
       setView((current) => (current.stage === 'password' ? { stage: 'ready', meta: current.meta } : current))
     } catch (error) {
-      // spec §3：verify 401=invalid_password（密码错）、429=按 IP+token 5 次/10min 限流。
+      // spec §3：verify 也可回 404/410——表单打开期间链接被撤销/过期/文件入回收站。
+      // fix 评审 MINOR-1：这两种状态是「链接死了」而非「这次密码不对」，切失效卡片（复用 metaFailure
+      // 的 reason→撤销/过期/不存在文案），不再用内联「验证失败」掩盖；401/429 保持内联（可重试语义）。
       const status = error instanceof ApiError ? error.status : 0
+      if (status === 404 || status === 410) {
+        setPasswordError(null)
+        setView(metaFailure(error))
+        return
+      }
       setPasswordError(
         status === 401 ? '密码错误。' : status === 429 ? '尝试次数过多，请稍后再试。' : '验证失败，请稍后重试。',
       )
@@ -147,7 +159,9 @@ export function ShareRoute() {
                     type="password"
                     required
                     autoFocus
-                    autoComplete="current-password"
+                    // fix 评审 MINOR-3：此处解的是「分享密码」，不是访客账号密码——current-password
+                    // 会诱导密码管理器回填已存账号凭据（错误凭证），用 off 明确「永不自动填充」。
+                    autoComplete="off"
                     placeholder="输入分享密码"
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
