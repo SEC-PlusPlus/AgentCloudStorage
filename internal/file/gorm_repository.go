@@ -391,7 +391,32 @@ func (r *GORMRepository) FindBlob(ctx context.Context, sha256 string) (*Object, 
 // boolean. The usual upsert alternative is not: ON DUPLICATE KEY UPDATE would
 // report 1/2/0 depending on whether the duplicate update changes anything,
 // which cannot distinguish "pre-existing" from "inserted".
+//
+// DEADLOCK CONTRACT (B1 review RF1): INSERT IGNORE against an EXISTING
+// committed duplicate takes a SHARED lock on the row, and the following
+// SELECT ... FOR UPDATE then requests exclusive — the classic S→X upgrade
+// deadlock (MySQL errno 1213) when two callers probe one popular blob, and
+// equally between an adopter and a concurrent releaser. The primitive stays
+// free of retry logic; CALLERS MUST treat 1213 (deadlock) and 1205
+// (lock-wait timeout) as retryable: retry the whole surrounding transaction
+// or surface 409 (B3 InstantUpload / B4 upload). Nothing is corrupted on
+// either outcome — MySQL rolls the loser back cleanly.
 func (r *GORMRepository) AcquireBlob(tx *gorm.DB, sha256, contentType string, size int64) (*Object, bool, error) {
+	// Input guards live in the primitive, not in any handler regex (RF2):
+	// INSERT IGNORE coerces a malformed sha into a garbage PK with
+	// created=true (phantom refcount row) and silently truncates an
+	// over-long content_type, diverging from files.content_type (255 wide).
+	if err := validateBlobSha256(sha256); err != nil {
+		return nil, false, err
+	}
+	if size < 0 {
+		return nil, false, fmt.Errorf("acquire blob %s: negative size", sha256)
+	}
+	// Clamp-vs-reject decision: CLAMP (see ClampContentType) so a long MIME
+	// cannot hard-fail an otherwise-valid upload; callers must write the
+	// files row from the returned Object.ContentType for consistency.
+	contentType = ClampContentType(contentType)
+
 	result := tx.Clauses(clause.Insert{Modifier: "IGNORE"}).Create(&Object{
 		Sha256:      sha256,
 		ObjectKey:   BlobObjectKey(sha256),
@@ -427,6 +452,13 @@ func (r *GORMRepository) AcquireBlob(tx *gorm.DB, sha256, contentType string, si
 // the key to the delayed physical GC (spec §1.4); otherwise (objectKey, false).
 // A row that is already gone (concurrent release raced to zero, or never
 // existed) is a no-op: ("", false, nil) — releases are idempotent per file row.
+//
+// DEADLOCK CONTRACT (B1 review RF1): the decrement's row lock races the
+// S→X upgrade path inside AcquireBlob (shared duplicate-key lock vs this
+// exclusive update, plus adopt-vs-release interleaving on the same PK).
+// CALLERS MUST treat MySQL 1213 (deadlock) / 1205 (lock-wait timeout) as
+// retryable and re-run the whole surrounding transaction — same contract as
+// AcquireBlob above; the loser rolls back cleanly, nothing corrupts.
 func (r *GORMRepository) ReleaseBlob(tx *gorm.DB, sha256 string) (string, bool, error) {
 	result := tx.Model(&Object{}).Where("sha256 = ?", sha256).
 		UpdateColumn("refcount", gorm.Expr("refcount - 1"))
