@@ -31,6 +31,7 @@ const SHARE_ITEM = {
 let filesBody: unknown = { items: [FILE_A], pagination: { page: 1, page_size: 20, total: 1 } }
 let foldersBody: unknown = { items: [FOLDER_7] }
 let createShareRes: { status: number; body?: unknown } = { status: 201, body: SHARE_ITEM }
+let holdCreate: Promise<void> | null = null // 挂起 POST /shares 用（钉 aria-busy 在途态）
 let listRes: { status: number; body?: unknown } = { status: 200, body: { items: [SHARE_ITEM] } }
 let revokeRes: { status: number; body?: unknown } = { status: 204 }
 
@@ -47,7 +48,9 @@ function impl(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     authorization: new Headers(init?.headers ?? {}).get('authorization'),
   })
   if (method === 'POST' && /^\/api\/v1\/files\/\d+\/shares$/.test(url)) {
-    return Promise.resolve(jsonResponse(createShareRes.status, createShareRes.body))
+    return (holdCreate ?? Promise.resolve()).then(() =>
+      jsonResponse(createShareRes.status, createShareRes.body),
+    )
   }
   if (method === 'GET' && url === '/api/v1/shares') {
     return Promise.resolve(jsonResponse(listRes.status, listRes.body))
@@ -90,6 +93,7 @@ beforeEach(() => {
   filesBody = { items: [FILE_A], pagination: { page: 1, page_size: 20, total: 1 } }
   foldersBody = { items: [FOLDER_7] }
   createShareRes = { status: 201, body: SHARE_ITEM }
+  holdCreate = null
   listRes = { status: 200, body: { items: [SHARE_ITEM] } }
   revokeRes = { status: 204 }
   requests = []
@@ -219,14 +223,22 @@ describe('ShareDialog：面板入口→表单→结果态', () => {
     expect(sent('POST', /shares$/)).toBeUndefined()
   })
 
-  it('409 too_many_shares → 弹窗内联「分享数量已达上限（单文件 20 / 账号 50）。」，保持表单态', async () => {
+  it('409 too_many_shares → 弹窗内联「分享数量已达上限（单文件 20 / 账号 50）。」，保持表单态；提交在途 aria-busy 钉（MINOR-3）', async () => {
     createShareRes = { status: 409, body: { error: 'too_many_shares' } }
+    let release: (() => void) | undefined
+    holdCreate = new Promise<void>((resolve) => {
+      release = resolve
+    })
     renderPage()
     await screen.findByText('a.txt')
     const dialog = await openShareDialog('a.txt')
+    const form = within(dialog).getByLabelText('访问密码（可选）').closest('form') as HTMLFormElement
     await userEvent.click(within(dialog).getByRole('button', { name: '创建分享' }))
+    expect(form).toHaveAttribute('aria-busy', 'true') // 挂起窗口内在途态
+    release?.()
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('分享数量已达上限（单文件 20 / 账号 50）。')
     expect(within(dialog).getByRole('button', { name: '创建分享' })).toBeInTheDocument()
+    expect(form).toHaveAttribute('aria-busy', 'false') // 失败落定回可重试态
   })
 
   it('成功→关闭→再开=复位表单（无旧结果态/无旧密码草稿）；取消钮同关', async () => {

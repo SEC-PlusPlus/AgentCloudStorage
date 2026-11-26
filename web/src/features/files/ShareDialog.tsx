@@ -2,8 +2,8 @@
 // 分享语义仅单文件行——数组经 normalizeSingleTarget 归一（多选/空数组=null 关闭态），
 // 文件夹行防御性忽略（入口已在面板置灰/菜单不渲染双闸，此处第三闸）。
 // 密码预检与服务端 share.CreateOptions 同语义（service.go:81：runes≤64 且 UTF-8≤72 字节），
-// 前端先行拦截避免 400 才知道；创建失败经 mutationErrorMessage 弹窗内联呈现（W1 裁定：
-// 本弹窗错误走内联而非 MoveDialog 式 toast——结果态可就地重试）。
+// 前端先行拦截避免 400 才知道；创建失败经 mutationErrorMessage 弹窗内联呈现
+// （spec §1.1，2026-11-26 修订裁定：dialog 错误内联——与 MoveDialog 的 toast 载体不同，就地可重试）。
 // 复制红线（spec §7）：token 即凭证，仅显式点击「复制链接」才写剪贴板；clipboard 不可用/被拒
 // 回退选中文本（input.select），不报错不打断。vendored 无 select 组件（registry 名单外），
 // 有效期选择用原生 <select> + 玻璃类对齐 Input 视觉语言（MoveDialog 树选择器同款自建惯例）。
@@ -147,6 +147,8 @@ export function ShareDialog({ target, onClose }: ShareDialogProps) {
               event.preventDefault()
               submit()
             }}
+            // MINOR-3：提交在途标记（屏读器播报忙碌；钮已 disabled，此处补表单级语义）。
+            aria-busy={mutation.isPending}
             className="flex flex-col gap-2"
           >
             <label className="flex flex-col gap-1.5 text-sm text-[var(--color-foreground)]">
