@@ -31,7 +31,7 @@
 
 ### Task W1: 属主 API 段 + ShareDialog + 行入口
 
-**Files:** Modify `web/src/api/shares.ts`（追加 owner 段：createShare/listShares/revokeShare/shareUrl）、`web/src/features/files/RowContextMenu.tsx`、`web/src/features/files/RowToolbar.tsx`、`web/src/features/files/actions.ts`（FileActionType 增 'share'——纯开 dialog，无 mutation invalidation 需求则不加键）、`web/src/features/files/FilesPage.tsx`（dialog state 挂载，MoveDialog 同款）；Create `web/src/features/files/ShareDialog.tsx` + `share-dialog.test.tsx`；shares.ts owner 函数测（`api/shares.test.ts` 或就近）。
+**Files:** Modify `web/src/api/shares.ts`（追加 owner 段：createShare/listShares/revokeShare/shareUrl，全走 client.request）、`web/src/features/files/RowContextMenu.tsx`、`web/src/features/files/FilesPage.tsx`（ShareDialog state 挂载 + DetailPanel 派生动作组注入"分享"——DetailPanel 是纯呈现件，动作从页面注入，勿在面板组件里加业务）、`web/src/api/client.ts`（translateError 表补 404/409 share 面文案）；Create `web/src/features/files/ShareDialog.tsx` + `share-dialog.test.tsx`。**注意 builder-check 裁定：RowToolbar 不放（abc-4 浮条仅批量）。**
 
 **Interfaces:** Produces `createShare(fileId:number, opts:{password?:string;expires_in?:number}): Promise<ShareItem>`、`shareUrl(token):string`；`ShareDialogProps {target: FileRow|null; onClose():void}`（对齐 MoveDialogProps 形状）。
 
