@@ -20,13 +20,20 @@
 // no daemon — a daily run with the default 1h window is the suggested cadence
 // for a personal drive; see deploy/README.md for the cron line.
 //
-// Assumptions this sweeper is built on — all three are load-bearing:
+// Assumptions this sweeper is built on — load-bearing:
 //   - MinIO bucket versioning is OFF (the deployment assumption in
 //     deploy/README): List surfaces exactly the current object set, and a
 //     re-Copy of blobs/<sha> replaces rather than shadows it.
-//   - The safety window exceeds the longest healthy upload: a tmp object is
-//     written by ONE in-flight request (direct uploads are ≤50MiB and finish
-//     in seconds), so a LIVE tmp is always younger than maxAge and survives.
+//   - 窗口以对象 age 近似行丢失时刻（B5 review I1）：the safety window
+//     approximates the ROW-LOSS time by the BLOB's LastModified, which only
+//     bounds it for first-ever uploads — a same-sha rebuild refreshes the age
+//     AND the row, so the dangerous shape (row lost at t0, blob age stale) is
+//     closed NOT by the window but by executePlan's per-key objects recheck
+//     immediately before each blob delete. tmps are never row-referenced, so
+//     no recheck is needed there.
+//   - The window exceeds the longest healthy upload: a tmp object is written
+//     by ONE in-flight request (direct uploads are ≤50MiB and finish in
+//     seconds), so a LIVE tmp is always younger than maxAge and survives.
 //     Anything older at users/*/tmp-* is a crash leftover by construction.
 //   - Multipart channel keys users/<uid>/<uuid> are NEVER touched: the v1
 //     dedup scope (spec §1.2 decision 2) leaves them exclusively owned by
@@ -41,6 +48,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"sort"
@@ -151,6 +159,7 @@ func isTmpKey(key string) bool {
 func main() {
 	maxAge := flag.Duration("max-age", time.Hour, "safety window: sweep only objects strictly older than this (0 = everything older than now; tests)")
 	dryRun := flag.Bool("dry-run", false, "print the deletion plan as JSON and delete nothing")
+	force := flag.Bool("force", false, "proceed even when the objects census is empty while blobs are planned (mis-config guard off; see censusGuard)")
 	flag.Parse()
 
 	if *maxAge < 0 {
@@ -215,6 +224,11 @@ func main() {
 
 	plan := gcDecision(rows, toListed(listBlobs), toListed(listUsers), time.Now(), *maxAge)
 
+	if err := censusGuard(len(rows), len(plan.Blobs), *force); err != nil {
+		slog.Error(err.Error())
+		os.Exit(1)
+	}
+
 	result := struct {
 		DryRun       bool     `json:"dry_run"`
 		MaxAge       string   `json:"max_age"`
@@ -222,6 +236,7 @@ func main() {
 		PlannedTmps  []string `json:"planned_tmps"`
 		DeletedBlobs int      `json:"deleted_blobs"`
 		DeletedTmps  int      `json:"deleted_tmps"`
+		SkippedBlobs int      `json:"skipped_blobs"`
 		Failures     int      `json:"failures"`
 	}{
 		DryRun:       *dryRun,
@@ -231,22 +246,26 @@ func main() {
 	}
 
 	if !*dryRun {
-		for _, key := range plan.Blobs {
-			if err := objectStorage.Delete(ctx, key); err != nil {
-				slog.Error("delete blob failed", "key", key, "error", err)
-				result.Failures++
-				continue
+		// rowExists: the I1 per-key recheck — an objects row matching by
+		// object_key OR blobs/<sha> (exactly the census's liveness test,
+		// re-run NOW so a rebuild that committed mid-flight is respected).
+		rowExists := func(key string) (bool, error) {
+			q := db.Table("objects").Where("object_key = ?", key)
+			if sha, ok := strings.CutPrefix(key, "blobs/"); ok && isLowerHex64(sha) {
+				q = q.Or("sha256 = ?", sha)
 			}
-			result.DeletedBlobs++
-		}
-		for _, key := range plan.Tmps {
-			if err := objectStorage.Delete(ctx, key); err != nil {
-				slog.Error("delete tmp object failed", "key", key, "error", err)
-				result.Failures++
-				continue
+			var n int64
+			if err := q.Count(&n).Error; err != nil {
+				return false, err
 			}
-			result.DeletedTmps++
+			return n > 0, nil
 		}
+		del := func(key string) error { return objectStorage.Delete(ctx, key) }
+		run := executePlan(plan, del, rowExists)
+		result.DeletedBlobs = run.DeletedBlobs
+		result.DeletedTmps = run.DeletedTmps
+		result.SkippedBlobs = run.SkippedBlobs
+		result.Failures = run.Failures
 	}
 
 	if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
@@ -259,10 +278,78 @@ func main() {
 		"planned_tmps", len(plan.Tmps),
 		"deleted_blobs", result.DeletedBlobs,
 		"deleted_tmps", result.DeletedTmps,
+		"skipped_blobs", result.SkippedBlobs,
 		"failures", result.Failures)
 	if result.Failures > 0 {
 		os.Exit(1)
 	}
+}
+
+// planResult tallies one executePlan run.
+type planResult struct {
+	DeletedBlobs int
+	DeletedTmps  int
+	SkippedBlobs int // rows reappeared at recheck — §1.4 race closed live
+	Failures     int
+}
+
+// executePlan performs the deletion half of the sweep (B5 review I1):
+// IMMEDIATELY before each blob delete it rechecks the objects table
+// (`rowExists`) — the census above only approximates the row-loss moment via
+// blob age, so a same-sha rebuild whose CopyObject+INSERT commit landed
+// between census and here would otherwise lose its bytes to our RemoveObject
+// (the ONLY surviving delete-references-blob path, and exactly the §1.4 race
+// the delayed design exists to 杜绝). Recheck hit → skip, keep bytes. tmp
+// keys carry no row ever, so they delete straight away. A failed recheck is
+// treated as "row may exist": conservative skip + failure, never a blind
+// delete.
+func executePlan(plan gcPlan, del func(string) error, rowExists func(string) (bool, error)) planResult {
+	var res planResult
+	for _, key := range plan.Blobs {
+		live, err := rowExists(key)
+		if err != nil {
+			slog.Error("objects recheck failed — skipping key (conservative)", "key", key, "error", err)
+			res.Failures++
+			continue
+		}
+		if live {
+			slog.Warn("objects row reappeared since census — skipping (in use)", "key", key)
+			res.SkippedBlobs++
+			continue
+		}
+		if err := del(key); err != nil {
+			slog.Error("delete blob failed", "key", key, "error", err)
+			res.Failures++
+			continue
+		}
+		res.DeletedBlobs++
+	}
+	for _, key := range plan.Tmps {
+		if err := del(key); err != nil {
+			slog.Error("delete tmp object failed", "key", key, "error", err)
+			res.Failures++
+			continue
+		}
+		res.DeletedTmps++
+	}
+	return res
+}
+
+// censusGuard is the mis-pointed-config footgun break (B5 review M4): a
+// healthy dedup deployment ALWAYS has objects rows for its blobs/. Zero rows
+// while the plan wants to delete aged blobs therefore means the DB we
+// queried is not the one the bucket belongs to (wrong config/env) — deleting
+// then would erase a live drive. Refuse unless --force.
+func censusGuard(objectRows, plannedBlobs int, force bool) error {
+	if objectRows == 0 && plannedBlobs > 0 && !force {
+		return fmt.Errorf(
+			"objects census returned ZERO rows while %d aged blob(s) are planned for deletion — "+
+				"the database almost certainly is not the one this bucket belongs to; "+
+				"verify config, then re-run with --force only if a rowless-while-blobs-alive state is real",
+			plannedBlobs,
+		)
+	}
+	return nil
 }
 
 func toListed(infos []storage.ObjectInfo) []listedObject {

@@ -526,8 +526,9 @@ func (s *Service) Restore(ctx context.Context, ownerID uint64, fileID uint64) er
 // PermanentDelete forks on files.sha256 (spec §1.3 delete row, §1.4 delayed
 // GC). THE RED LINE: a dedup row's object_key may be SHARED — any
 // storage.Delete on it destroys other users' data — so the dedup branch is
-// pure logic: ONE objects→users→files transaction (ReleaseBlob first inside
-// HardDeleteWithBlobRelease) and ZERO MinIO calls in or after the tx. A
+// pure logic: ONE transaction with the ReleaseBlob acquired FIRST (objects
+// row, then the legacy files→users delete tail) inside
+// HardDeleteWithBlobRelease, and ZERO MinIO calls in or after the tx. A
 // refcount that hits zero only deletes the objects row; the physical blob is
 // reclaimed later by cmd/blob-gc under the safety window, which is precisely
 // what closes the §1.4 late-Delete-vs-rebuild race a synchronous delete would

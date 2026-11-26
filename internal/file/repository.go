@@ -21,10 +21,11 @@ type Repository interface {
 	HardDeleteWithQuota(ctx context.Context, ownerID uint64, fileID uint64, extra ...func(tx *gorm.DB) error) error
 
 	// HardDeleteWithBlobRelease is the B5 dedup-row twin (spec §1.3/§1.4):
-	// ONE transaction that releases the blob reference FIRST (objects row,
-	// matching the objects→users→files lock order of InstantCreate/DedupCreate
-	// — B3-M4), then does HardDeleteWithQuota's exact guarded quota+row work,
-	// then the extra hooks. It NEVER touches the storage layer: a zeroed
+	// ONE transaction that releases the blob reference FIRST (B3-M4: the
+	// objects-first lock PREFIX shared with InstantCreate/DedupCreate — the
+	// shared delete tail itself is files-row→users, legacy order unchanged),
+	// then does HardDeleteWithQuota's exact guarded quota+row work, then the
+	// extra hooks. It NEVER touches the storage layer: a zeroed
 	// refcount deletes only the objects row; the physical blob waits for
 	// cmd/blob-gc's safety window. InnoDB 1213/1205 surface verbatim for the
 	// Service retry loop to classify.

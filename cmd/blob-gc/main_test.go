@@ -1,10 +1,82 @@
 package main
 
 import (
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
+
+// ---------------------------------------------------------------------------
+// executePlan (B5 review I1): the per-key objects recheck immediately before
+// each blob delete closes the residual §1.4 race (census sees the row gone at
+// t0, a same-sha rebuild commits its CopyObject+INSERT mid-run, our RemoveObject
+// would land on live bytes). tmps carry no rows, so they never recheck.
+// ---------------------------------------------------------------------------
+
+func TestExecutePlanSkipsReappearedBlobRow(t *testing.T) {
+	plan := gcPlan{
+		Blobs: []string{"blobs/" + shaA, "blobs/" + shaB},
+		Tmps:  []string{"users/7/tmp-crash"},
+	}
+	var deleted []string
+	checked := 0
+	liveRows := map[string]bool{"blobs/" + shaA: true} // row rebuilt mid-sweep
+	res := executePlan(plan,
+		func(key string) error { deleted = append(deleted, key); return nil },
+		func(key string) (bool, error) {
+			checked++
+			return liveRows[key], nil
+		},
+	)
+	if res.DeletedBlobs != 1 || res.SkippedBlobs != 1 || res.DeletedTmps != 1 || res.Failures != 0 {
+		t.Fatalf("result = %+v, want {1 deleted blob, 1 skipped, 1 tmp, 0 failures}", res)
+	}
+	want := []string{"blobs/" + shaB, "users/7/tmp-crash"}
+	if !reflect.DeepEqual(deleted, want) {
+		t.Fatalf("deleted = %v, want %v (reappeared blob NEVER deleted)", deleted, want)
+	}
+	if checked != 2 {
+		t.Errorf("rechecks = %d, want 2 (blobs only — tmp must not recheck)", checked)
+	}
+}
+
+func TestExecutePlanRecheckErrorIsConservativeSkip(t *testing.T) {
+	boom := errors.New("db down")
+	var deleted []string
+	res := executePlan(gcPlan{Blobs: []string{"blobs/" + shaA}},
+		func(key string) error { deleted = append(deleted, key); return nil },
+		func(string) (bool, error) { return false, boom },
+	)
+	if len(deleted) != 0 {
+		t.Errorf("deleted %v after a failed recheck — must never blind-delete", deleted)
+	}
+	if res.Failures != 1 || res.DeletedBlobs != 0 {
+		t.Errorf("result = %+v, want failures 1 / deleted 0", res)
+	}
+}
+
+func TestCensusGuardEmptyCensusFootgun(t *testing.T) {
+	// Mis-pointed config: zero rows but aged blobs planned → refuse, and the
+	// error must name the escape hatch.
+	err := censusGuard(0, 3, false)
+	if err == nil {
+		t.Fatal("empty census + planned blobs must abort")
+	}
+	if !strings.Contains(err.Error(), "--force") {
+		t.Errorf("guard error must name --force: %v", err)
+	}
+	if err := censusGuard(0, 3, true); err != nil {
+		t.Errorf("--force must override: %v", err)
+	}
+	if err := censusGuard(7, 3, false); err != nil {
+		t.Errorf("non-empty census must pass: %v", err)
+	}
+	if err := censusGuard(0, 0, false); err != nil {
+		t.Errorf("empty plan needs no guard: %v", err)
+	}
+}
 
 // gcDecision matrix (B5 contract 3):
 //   - blob WITH an objects row                      → keep, any age

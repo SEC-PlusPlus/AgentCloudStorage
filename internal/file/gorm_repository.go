@@ -116,10 +116,13 @@ func (r *GORMRepository) HardDeleteWithQuota(
 }
 
 // HardDeleteWithBlobRelease (B5, spec §1.3/§1.4) is the dedup-row delete:
-// ReleaseBlob runs FIRST inside the transaction, so the tx acquires
-// objects→users→files — the exact lock order of InstantCreate/DedupCreate
-// (B3-M4). A delete racing an instant upload on one sha then serialises on
-// the blob row instead of deadlocking across layers; whatever 1213/1205
+// ReleaseBlob runs FIRST inside the transaction, so the lock prefix is
+// objects→files(row SELECT FOR UPDATE)→users (B5 review M1: the shared
+// hardDeleteTx tail locks the file row before the users row — kept exactly as
+// the legacy SQL has always done it; only the objects-first PREFIX matters for
+// B3-M4, because both this and InstantCreate/DedupCreate acquire the blob row
+// before anything else, so a delete racing an instant upload on one sha
+// serialises there instead of deadlocking across layers). Whatever 1213/1205
 // remains is retried by the Service loop like the acquire paths.
 //
 // The zero-refcount outcome is (row deleted, blob untouched) — this method
