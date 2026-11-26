@@ -8,6 +8,7 @@ import { AppLayout } from './AppLayout'
 import { canAccess, type RouteGuardMeta } from './guard'
 import { FilesRoute } from './FilesRoute'
 import { LoginRoute } from './LoginRoute'
+import { SharesRoute } from './SharesRoute'
 import { ShareRoute } from './ShareRoute'
 import { TrashRoute } from './TrashRoute'
 
@@ -46,6 +47,11 @@ export const routeObjects: RouteObject[] = [
       {
         path: 'trash',
         element: <TrashRoute />, // Task 11 兑现占位（trash-route 锚点移入 TrashRoute 内部保留）
+        middleware: [authGuard({ requiresAuth: true })],
+      },
+      {
+        path: 'shares',
+        element: <SharesRoute />, // Task W2「我的分享」管理页（Dock 导航入口同源）
         middleware: [authGuard({ requiresAuth: true })],
       },
       { path: '*', loader: () => redirect('/files') },
