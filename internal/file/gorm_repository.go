@@ -447,6 +447,90 @@ func (r *GORMRepository) AcquireBlob(tx *gorm.DB, sha256, contentType string, si
 	return &obj, created, nil
 }
 
+// newInstantFile is the single mapper from an acquired Object to the files
+// row an instant probe creates (B1 contract #2): ObjectKey/Size/ContentType/
+// ETag/Sha256 ALL come from the committed row — never re-derived from the
+// probe body. The service retry loop and this repository share it so the
+// fake and the real tx can never drift on field provenance.
+func newInstantFile(ownerID uint64, in InstantInput, obj *Object) *File {
+	sha := obj.Sha256
+	return &File{
+		OwnerID:      ownerID,
+		FolderID:     in.FolderID,
+		OriginalName: in.OriginalName,
+		ObjectKey:    obj.ObjectKey,
+		Sha256:       &sha,
+		Size:         obj.Size,
+		ContentType:  obj.ContentType,
+		ETag:         obj.Sha256,
+		Status:       StatusActive,
+	}
+}
+
+// InstantCreate runs the whole instant-upload probe as one transaction
+// (spec §1.3 hit path, §4 flow, §5 tx boundary precedent: HardDeleteWithQuota):
+//
+//  1. locked read of the objects row — a miss is ErrBlobNotFound and NOTHING
+//     else is touched (no phantom adopt: AcquireBlob would happily INSERT
+//     IGNORE a row for content nobody uploaded);
+//  2. AcquireBlob refcount+1 with the row's own content_type/size (B1 clamps
+//     inside the primitive; the probe's declared type never overwrites the
+//     first uploader's committed value);
+//  3. quota consume: used_bytes += size guarded by used_bytes + size <=
+//     quota_bytes (spec §1.3 decision 1 — instant files charge the logical
+//     quota like real uploads). Zero-size blobs skip the update (the guarded
+//     UPDATE would match 0 changed rows and be indistinguishable from an
+//     over-quota user; nothing to charge anyway).
+//  4. files row via newInstantFile — every content field from the Object.
+//
+// The S→X upgrade inside AcquireBlob can surface MySQL 1213/1205 under
+// concurrent same-sha probes (B1 review RF1, integration-proven): this
+// method does NOT retry — the Service classifies with errors.As on
+// *mysql.MySQLError and re-runs the whole transaction (fresh call = fresh tx).
+func (r *GORMRepository) InstantCreate(ctx context.Context, ownerID uint64, in InstantInput) (*File, error) {
+	var created *File
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing Object
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("sha256 = ?", in.Sha256).
+			First(&existing).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrBlobNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("instant find blob: %w", err)
+		}
+
+		obj, _, err := r.AcquireBlob(tx, existing.Sha256, existing.ContentType, existing.Size)
+		if err != nil {
+			return err
+		}
+
+		if obj.Size > 0 {
+			result := tx.Table("users").
+				Where("id = ? AND used_bytes + ? <= quota_bytes", ownerID, obj.Size).
+				UpdateColumn("used_bytes", gorm.Expr("used_bytes + ?", obj.Size))
+			if result.Error != nil {
+				return fmt.Errorf("consume instant quota: %w", result.Error)
+			}
+			if result.RowsAffected == 0 {
+				return ErrQuotaExceeded
+			}
+		}
+
+		record := newInstantFile(ownerID, in, obj)
+		if err := tx.Create(record).Error; err != nil {
+			return fmt.Errorf("save instant file: %w", err)
+		}
+		created = record
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return created, nil
+}
+
 // ReleaseBlob decrements the objects row for sha256. When refcount hits zero
 // the row is deleted and (objectKey, true) is returned so the caller can hand
 // the key to the delayed physical GC (spec §1.4); otherwise (objectKey, false).

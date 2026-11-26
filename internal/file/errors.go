@@ -15,3 +15,9 @@ var ErrBlobNotFound = errors.New("blob not found")
 // INSERT IGNORE would silently COERCE such input into a garbage primary key
 // with created=true (a phantom refcount row), so the primitive guards it.
 var ErrInvalidSha256 = errors.New("invalid sha256")
+
+// ErrBlobBusy is the bounded-retry exhaustion sentinel (B1 review RF1): the
+// instant-upload transaction lost the InnoDB deadlock race (1213) or hit the
+// lock-wait timeout (1205) on every attempt. Nothing was written — MySQL rolls
+// the loser back cleanly — so the client may safely retry the whole probe.
+var ErrBlobBusy = errors.New("blob busy, retry")

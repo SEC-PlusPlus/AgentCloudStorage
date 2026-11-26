@@ -44,6 +44,11 @@ func NewRouter(fileHandler *FileHandler, folderHandler *FolderHandler, uploadHan
 		{
 			protected.GET("/files", fileHandler.List)
 			protected.POST("/files", fileHandler.Upload)
+			// 秒传探针（spec §3）：静态段 /files/instant 必须注册在 /files/:id
+			// 系列之前——gin v1.12 支持静态/参数兄弟共存（/files/search 即先例），
+			// 但注册序仍按“静态在前”钉住约定；真正的冲突防护是构造期 panic +
+			// TestInstantRouteCoexistsWithIDWildcard。
+			protected.POST("/files/instant", fileHandler.InstantUpload)
 			protected.GET("/files/:id/content", fileHandler.Download)
 			protected.DELETE("/files/:id", fileHandler.Delete)
 			protected.PATCH("/files/:id", fileHandler.Rename)

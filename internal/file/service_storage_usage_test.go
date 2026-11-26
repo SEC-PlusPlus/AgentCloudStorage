@@ -102,6 +102,10 @@ func (*usageRepositoryStub) ReleaseBlob(*gorm.DB, string) (string, bool, error) 
 	return "", false, errors.New("unexpected ReleaseBlob call")
 }
 
+func (*usageRepositoryStub) InstantCreate(context.Context, uint64, InstantInput) (*File, error) {
+	return nil, errors.New("unexpected InstantCreate call")
+}
+
 func TestStorageUsageReturnsUsedAndQuotaBytes(t *testing.T) {
 	repo := &usageRepositoryStub{usedBytes: 1234, quotaBytes: 56789}
 	svc := NewService(nil, repo, nil)

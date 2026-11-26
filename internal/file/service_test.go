@@ -23,6 +23,20 @@ type cascadeRepositoryStub struct {
 	hardDeleteCalls int
 	extraLens       []int
 	hardDeleteErr   error
+
+	// Instant-upload knobs (B3): FindBlob answers findBlobObj when set, else
+	// the default miss sentinel stays live so every pre-B3 cascade test keeps
+	// compiling and passing unchanged. instantCreateErrs has STRICT length
+	// semantics: len == how many attempts fail (errors[i] = attempt i+1's
+	// failure, may itself be nil); attempt len+1 succeeds — with
+	// instantCreateFile when set, else derived from findBlobObj via the
+	// production mapper (newInstantFile), mirroring the real gorm tx.
+	findBlobObj        *Object
+	findBlobErr        error
+	instantCreateCalls int
+	instantCreateErrs  []error
+	instantCreateFile  *File
+	lastInstantInput   InstantInput
 }
 
 var _ Repository = (*cascadeRepositoryStub)(nil)
@@ -123,8 +137,31 @@ func (r *cascadeRepositoryStub) CreateWithQuota(context.Context, *File, int64) e
 	return errors.New("unexpected CreateWithQuota call")
 }
 
-func (r *cascadeRepositoryStub) FindBlob(context.Context, string) (*Object, error) {
-	return nil, ErrBlobNotFound
+func (r *cascadeRepositoryStub) FindBlob(_ context.Context, _ string) (*Object, error) {
+	if r.findBlobErr != nil {
+		return nil, r.findBlobErr
+	}
+	if r.findBlobObj == nil {
+		return nil, ErrBlobNotFound
+	}
+	return r.findBlobObj, nil
+}
+
+func (r *cascadeRepositoryStub) InstantCreate(_ context.Context, ownerID uint64, in InstantInput) (*File, error) {
+	r.instantCreateCalls++
+	r.lastInstantInput = in
+	if r.instantCreateCalls <= len(r.instantCreateErrs) {
+		if err := r.instantCreateErrs[r.instantCreateCalls-1]; err != nil {
+			return nil, err
+		}
+	}
+	if r.instantCreateFile != nil {
+		return r.instantCreateFile, nil
+	}
+	if r.findBlobObj == nil {
+		return nil, ErrBlobNotFound
+	}
+	return newInstantFile(ownerID, in, r.findBlobObj), nil
 }
 
 func (r *cascadeRepositoryStub) AcquireBlob(*gorm.DB, string, string, int64) (*Object, bool, error) {

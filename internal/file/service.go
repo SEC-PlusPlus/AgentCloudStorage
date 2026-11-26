@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -64,6 +66,17 @@ type MoveInput struct {
 	TargetFolderID uint64
 }
 
+// InstantInput is the POST /files/instant probe payload (spec §2.3): the
+// client declares a sha256 it already computed; the server links a NEW files
+// row to the existing content-addressed blob without moving any bytes.
+type InstantInput struct {
+	OwnerID      uint64
+	Sha256       string
+	OriginalName string
+	ContentType  string
+	FolderID     uint64
+}
+
 type StorageUsageResult struct {
 	UsedBytes  int64
 	QuotaBytes int64
@@ -93,6 +106,14 @@ func NewService(objectStorage storage.ObjectStorage, repo Repository, folders Fo
 		repo:    repo,
 		folders: folders,
 	}
+}
+
+// WithFolderAuthorizer re-wires folder authorization after construction —
+// the same opt-in seam pattern as SetSharePurger. Tests inject a fake here;
+// production wiring (main.go) keeps NewService's nil default and the folder
+// service wired at boot.
+func (s *Service) WithFolderAuthorizer(folders FolderAuthorizer) {
+	s.folders = folders
 }
 
 // SetSharePurger wires the spec §5.4 cascade; until it is called, permanent
@@ -200,6 +221,113 @@ func (s *Service) Upload(ctx context.Context, input UploadInput) (created *File,
 		return nil, fmt.Errorf("save file and quota: %w", err)
 	}
 	return file, nil
+}
+
+// instantUploadMaxAttempts bounds the retry loop over the acquire+create
+// transaction (B1 review RF1). Concurrent same-sha probes take AcquireBlob's
+// documented S→X upgrade deadlock (MySQL 1213) or block into 1205 — the
+// integration suite proved it fires. Retry is cheap (no bytes moved) but must
+// be bounded; exhaustion answers ErrBlobBusy (handler: 409).
+const (
+	instantUploadMaxAttempts = 4
+	instantUploadRetryPause  = 2 * time.Millisecond
+)
+
+// isBlobLockContention classifies the RF1 retryable set by driver errno —
+// NEVER by error-string matching (the B3 contract; the integration helper's
+// substring hack is test-only and must not leak into production paths).
+// errors.As walks our fmt.Errorf("%w") wrapping, so repository context is
+// transparent to the classification.
+func isBlobLockContention(err error) bool {
+	var myErr *mysql.MySQLError
+	if !errors.As(err, &myErr) {
+		return false
+	}
+	// 1213 ER_LOCK_DEADLOCK, 1205 ER_LOCK_WAIT_TIMEOUT.
+	return myErr.Number == 1213 || myErr.Number == 1205
+}
+
+// InstantUpload answers the 秒传 probe (spec §1.3/§2.3): when the sha256
+// matches an existing blob, link a files row for the caller WITHOUT any byte
+// transfer — refcount+1, quota consumed like a real upload, row fields taken
+// from the objects row. A miss is ErrBlobNotFound (handler: 200 exists:false),
+// not an error shape of its own.
+func (s *Service) InstantUpload(ctx context.Context, input InstantInput) (*File, error) {
+	if input.OwnerID == 0 {
+		return nil, errors.New("owner id is required")
+	}
+
+	// Same name rules as Upload, and the same primitive that guards
+	// AcquireBlob — one sha256 validation implementation, no regex duplication.
+	name := strings.TrimSpace(input.OriginalName)
+	if !validFileName(name) {
+		return nil, ErrInvalidFileName
+	}
+	if err := validateBlobSha256(input.Sha256); err != nil {
+		return nil, err
+	}
+	input.OriginalName = name
+	input.ContentType = coarseContentType(input.ContentType)
+
+	// Probe first: a cold sha must not consume folder-auth or quota work,
+	// and 未命中 is a normal 200 answer, not an error path. The row values
+	// themselves are re-read INSIDE the tx (InstantCreate) under the blob
+	// lock — the authoritative copy — so this read gates existence only.
+	if _, err := s.repo.FindBlob(ctx, input.Sha256); err != nil {
+		return nil, fmt.Errorf("instant probe: %w", err)
+	}
+
+	if err := s.folders.EnsureOwned(ctx, input.OwnerID, input.FolderID); err != nil {
+		return nil, fmt.Errorf("validate instant upload folder: %w", err)
+	}
+
+	// acquire+create as ONE transaction per attempt (spec §5: transaction
+	// boundaries live in gorm_repository, HardDeleteWithQuota precedent).
+	// Every retry calls InstantCreate fresh — a poisoned tx is never reused.
+	var lastErr error
+	for attempt := 1; attempt <= instantUploadMaxAttempts; attempt++ {
+		if attempt > 1 {
+			timer := time.NewTimer(time.Duration(attempt-1) * instantUploadRetryPause)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
+		}
+		created, err := s.repo.InstantCreate(ctx, input.OwnerID, input)
+		if err == nil {
+			return created, nil
+		}
+		if !isBlobLockContention(err) {
+			// Deterministic outcomes (miss, quota, real db errors) surface
+			// verbatim — handler mappings stay Is-able.
+			return nil, err
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("instant upload: %w (last: %w)", ErrBlobBusy, lastErr)
+}
+
+// coarseContentType is the spec §2.3 "MIME 白名单粗筛": a declared type that
+// does not parse as a media type with a non-empty subtype degrades to
+// application/octet-stream instead of failing the probe. The persisted value
+// comes from the objects row regardless (newInstantFile), so this only
+// sanitizes what the tx may record when it adopts an existing blob.
+func coarseContentType(declared string) string {
+	declared = strings.TrimSpace(declared)
+	if declared == "" {
+		return "application/octet-stream"
+	}
+	base, _, err := mime.ParseMediaType(declared)
+	if err != nil {
+		return "application/octet-stream"
+	}
+	// ParseMediaType accepts single tokens and bare "*"; require type/subtype.
+	if slash := strings.IndexByte(base, '/'); slash <= 0 || slash == len(base)-1 || base == "*" {
+		return "application/octet-stream"
+	}
+	return base
 }
 
 func (s *Service) List(ctx context.Context, input ListInput) (*ListResult, error) {

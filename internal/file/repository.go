@@ -36,4 +36,12 @@ type Repository interface {
 	FindBlob(ctx context.Context, sha256 string) (*Object, error)
 	AcquireBlob(tx *gorm.DB, sha256, contentType string, size int64) (*Object, bool, error)
 	ReleaseBlob(tx *gorm.DB, sha256 string) (objectKey string, gone bool, err error)
+
+	// InstantCreate (spec B3, §1.3/§4) runs the whole instant probe as ONE
+	// transaction: locked blob read (miss → ErrBlobNotFound), AcquireBlob
+	// refcount+1, quota consume (used+size ≤ quota else ErrQuotaExceeded),
+	// files row insert with every content field taken from the acquired
+	// Object. InnoDB 1213/1205 from the blob lock are classified by the
+	// Service retry loop, not here.
+	InstantCreate(ctx context.Context, ownerID uint64, in InstantInput) (*File, error)
 }
