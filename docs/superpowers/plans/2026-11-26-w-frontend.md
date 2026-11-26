@@ -65,7 +65,7 @@
 
 ### Task W4: 真机 UI 剧本 + 文档回写
 
-- [ ] 栈已在线（8080/8001/5173 或重启）；`npm run dev` 后 playwright? **无浏览器自动化**→ curl 级验证 probe/dialog API 面 + **用户手测剧本写进报告**（建链→无痕→429→撤销；上传 bob 同字节文件→秒传成功 toast）。
+- [ ] 栈已在线（8080/8001/5173 或重启）；`npm run dev` 后 playwright? **无浏览器自动化**→ curl 级验证 probe/dialog API 面 + **用户手测剧本写进报告**（建链→无痕→429→撤销；上传 bob 同字节文件→秒传 ⚡ 徽标（无独立 toast，批尾计数））。
 - [ ] feature-progress/changelog（React 侧惯例：web/docs 的 changelog 文件，先读再加行）、README 已实现两行更新；commit `docs(web): W-track live verification record`。
 
 ## 收尾
