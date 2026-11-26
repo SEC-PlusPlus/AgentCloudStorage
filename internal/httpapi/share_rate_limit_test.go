@@ -114,7 +114,7 @@ func decodeShareError(t *testing.T, response *httptest.ResponseRecorder) string 
 }
 
 func TestRequireShareRateLimitVerifyFailClosed(t *testing.T) {
-	// key = "share-verify:"+token+":"+ClientIP()，5 次/10min。
+	// key = "share-verify:"+sha256hex(token)+":"+ClientIP()（token 哈希后入键），5 次/10min。
 	capture := swapSlogDefault(t)
 
 	// --- 三态之一：放行 ---

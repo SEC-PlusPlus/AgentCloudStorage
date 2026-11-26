@@ -97,3 +97,8 @@ dev（`govault-minio`）与 prod（`deploy/compose.yaml`）的 bucket 都**不�
 
 - MySQL 宿主 `127.0.0.1:3307`、MinIO `127.0.0.1:9000/9001`、Redis `127.0.0.1:6380`（见 `deploy/compose.yaml` 与根 README）。
 - 分享链接功能另需 Redis 在线做限流：`meta/download` 限流读失败时放行（fail-open + WARN 日志），`verify`（密码爆破面）Redis 不可用时返回 503（fail-closed）——这是设计行为，重启 Redis 即恢复，无需清键。
+
+## 生产上线前提（公网分享）
+
+- **生产 Redis 必须 ≥7.0**：verify 限流的 Lua（`internal/share/limiter.go` 的 `accessCountScript`）用了 `PEXPIRE ... NX`——该写法 7.0 才支持。低版本下每次 verify 都报错，而 verify 是 fail-closed，表现为分享密码功能整体 503、静默失效（读侧 fail-open，故障更不易察觉）。`deploy/compose.yaml` 已钉 `redis:7-alpine`；若改用外部/复用 Redis，部署前实测版本，别照抄：`docker exec <redis-container> sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli INFO server' | grep redis_version`（凭据走容器内环境变量，同上文 MYSQL_PWD 约定，不进命令行）。
+- **nginx access_log 会原样记录分享凭据**：公开 URL 里的 `:token` 路径段与 `?access=` JWT 由反代明文落盘——应用层 gin 日志已由 `internal/httpapi/router.go` 的 `accessLogFormatter` 脱敏（token/JWT 各留前 8 字符），但 `deploy/nginx.secplusplus.conf` 这类反代层没有。启用公网分享前评估：给 `location ~ /api/v1/public/shares/` 关闭或单独脱敏 `access_log`，并接受相应的日志留存策略。
