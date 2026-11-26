@@ -302,7 +302,7 @@ func TestInstantUploadRetryRecovers(t *testing.T) {
 
 func TestInstantUploadRetryExhaustionIsBlobBusy(t *testing.T) {
 	repo := &cascadeRepositoryStub{findBlobObj: instantObject()}
-	busy := make([]error, instantUploadMaxAttempts) // every attempt deadlocks
+	busy := make([]error, blobTxMaxAttempts) // every attempt deadlocks
 	for i := range busy {
 		busy[i] = mysqlErr(1213)
 	}
@@ -313,8 +313,8 @@ func TestInstantUploadRetryExhaustionIsBlobBusy(t *testing.T) {
 	if !errors.Is(err, ErrBlobBusy) {
 		t.Fatalf("error = %v, want ErrBlobBusy", err)
 	}
-	if repo.instantCreateCalls != instantUploadMaxAttempts {
-		t.Errorf("InstantCreate calls = %d, want exactly %d", repo.instantCreateCalls, instantUploadMaxAttempts)
+	if repo.instantCreateCalls != blobTxMaxAttempts {
+		t.Errorf("InstantCreate calls = %d, want exactly %d", repo.instantCreateCalls, blobTxMaxAttempts)
 	}
 }
 
@@ -322,7 +322,7 @@ func TestInstantUploadRetryWalksWrappedErrors(t *testing.T) {
 	// The retry classifier must see through repository context wrapping:
 	// fmt.Errorf("acquire blob insert: %w", &mysql.MySQLError{1213}).
 	repo := &cascadeRepositoryStub{findBlobObj: instantObject()}
-	wrapped := make([]error, instantUploadMaxAttempts)
+	wrapped := make([]error, blobTxMaxAttempts)
 	for i := range wrapped {
 		wrapped[i] = fmt.Errorf("acquire blob insert: %w", mysqlErr(1213))
 	}
@@ -333,8 +333,8 @@ func TestInstantUploadRetryWalksWrappedErrors(t *testing.T) {
 	if !errors.Is(err, ErrBlobBusy) {
 		t.Fatalf("wrapped 1213 must still retry→busy, got %v", err)
 	}
-	if repo.instantCreateCalls != instantUploadMaxAttempts {
-		t.Errorf("InstantCreate calls = %d, want %d (wrapping transparent)", repo.instantCreateCalls, instantUploadMaxAttempts)
+	if repo.instantCreateCalls != blobTxMaxAttempts {
+		t.Errorf("InstantCreate calls = %d, want %d (wrapping transparent)", repo.instantCreateCalls, blobTxMaxAttempts)
 	}
 }
 

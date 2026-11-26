@@ -327,6 +327,32 @@ func (r *GORMRepository) ReleaseQuota(ctx context.Context, ownerID uint64, size 
 	return nil
 }
 
+// convertReservationTx is CreateWithQuota's guarded reservation→usage update
+// lifted verbatim (B4): subtract the reservation, add the real usage, refuse
+// when the user row no longer satisfies quota. Shared with DedupCreate so the
+// direct-upload quota semantics are bit-identical before and after the dedup
+// rework.
+func convertReservationTx(tx *gorm.DB, ownerID uint64, reservedSize, fileSize int64) error {
+	result := tx.Table("users").
+		Where(
+			"id = ? AND reserved_bytes >= ? "+
+				"AND used_bytes <= quota_bytes "+
+				"AND ? <= quota_bytes - used_bytes",
+			ownerID, reservedSize, fileSize,
+		).
+		Updates(map[string]any{
+			"reserved_bytes": gorm.Expr("reserved_bytes - ?", reservedSize),
+			"used_bytes":     gorm.Expr("used_bytes + ?", fileSize),
+		})
+	if result.Error != nil {
+		return fmt.Errorf("convert reserved quota: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("quota reservation not found or quota exceeded")
+	}
+	return nil
+}
+
 func (r *GORMRepository) CreateWithQuota(
 	ctx context.Context,
 	file *File,
@@ -341,23 +367,8 @@ func (r *GORMRepository) CreateWithQuota(
 
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if reservedSize > 0 {
-			result := tx.Table("users").
-				Where(
-					"id = ? AND reserved_bytes >= ? "+
-						"AND used_bytes <= quota_bytes "+
-						"AND ? <= quota_bytes - used_bytes",
-					file.OwnerID, reservedSize, file.Size,
-				).
-				Updates(map[string]any{
-					"reserved_bytes": gorm.Expr("reserved_bytes - ?", reservedSize),
-					"used_bytes":     gorm.Expr("used_bytes + ?", file.Size),
-				})
-
-			if result.Error != nil {
-				return fmt.Errorf("convert reserved quota: %w", result.Error)
-			}
-			if result.RowsAffected == 0 {
-				return errors.New("quota reservation not found or quota exceeded")
+			if err := convertReservationTx(tx, file.OwnerID, reservedSize, file.Size); err != nil {
+				return err
 			}
 		}
 
@@ -521,6 +532,68 @@ func (r *GORMRepository) InstantCreate(ctx context.Context, ownerID uint64, in I
 		record := newInstantFile(ownerID, in, obj)
 		if err := tx.Create(record).Error; err != nil {
 			return fmt.Errorf("save instant file: %w", err)
+		}
+		created = record
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return created, nil
+}
+
+// DedupCreate runs the direct-upload dedup transaction (B4, spec §1.3/§4).
+// The service copied tmp→blobs/<sha> BEFORE calling this, so the moment the
+// objects row becomes visible the bytes already exist there — no half-blob
+// window for concurrent instant probes (report §"COPY BEFORE THE TX").
+//
+//  1. AcquireBlob: created → INSERT the objects row (object_key blobs/<sha>,
+//     coarse content_type clamped inside the primitive, refcount 1); hit →
+//     refcount+1 with the STORED row's values — the first uploader's
+//     content_type/size win, the caller's declaration is ignored there (B1
+//     contract);
+//  2. reservation→usage convert via convertReservationTx — the exact
+//     CreateWithQuota SQL, so direct-upload quota accounting is unchanged;
+//  3. files row through newInstantFile, the same provenance mapper the
+//     instant path uses: ObjectKey/Sha256/Size/ContentType/ETag ALL from the
+//     locked Object, ETag = sha256 (spec §2.1).
+//
+// The "refcount acquired but files insert failed" compensation question is
+// answered structurally: acquire and insert share this one transaction, so a
+// failed insert rolls the refcount move back with it — a committed row count
+// without its file rows cannot exist. Lock order objects→users→files matches
+// InstantCreate, keeping the two dedup paths deadlock-ordered against each
+// other. InnoDB 1213/1205 from the S→X upgrade surface verbatim here; the
+// Service retry loop classifies, this method never retries.
+func (r *GORMRepository) DedupCreate(ctx context.Context, in DedupCreateInput) (*File, error) {
+	if err := validateBlobSha256(in.Sha256); err != nil {
+		return nil, err
+	}
+	if in.Size < 0 || in.ReservedSize < 0 || in.Size > in.ReservedSize {
+		return nil, errors.New("invalid file size or reservation")
+	}
+
+	var created *File
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		obj, _, err := r.AcquireBlob(tx, in.Sha256, in.ContentType, in.Size)
+		if err != nil {
+			return err
+		}
+
+		if in.ReservedSize > 0 {
+			if err := convertReservationTx(tx, in.OwnerID, in.ReservedSize, obj.Size); err != nil {
+				return err
+			}
+		}
+
+		record := newInstantFile(in.OwnerID, InstantInput{
+			Sha256:       in.Sha256,
+			OriginalName: in.OriginalName,
+			ContentType:  in.ContentType,
+			FolderID:     in.FolderID,
+		}, obj)
+		if err := tx.Create(record).Error; err != nil {
+			return fmt.Errorf("save dedup file: %w", err)
 		}
 		created = record
 		return nil

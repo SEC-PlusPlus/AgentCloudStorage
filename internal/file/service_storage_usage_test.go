@@ -106,6 +106,10 @@ func (*usageRepositoryStub) InstantCreate(context.Context, uint64, InstantInput)
 	return nil, errors.New("unexpected InstantCreate call")
 }
 
+func (*usageRepositoryStub) DedupCreate(context.Context, DedupCreateInput) (*File, error) {
+	return nil, errors.New("unexpected DedupCreate call")
+}
+
 func TestStorageUsageReturnsUsedAndQuotaBytes(t *testing.T) {
 	repo := &usageRepositoryStub{usedBytes: 1234, quotaBytes: 56789}
 	svc := NewService(nil, repo, nil)

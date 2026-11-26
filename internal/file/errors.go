@@ -16,8 +16,11 @@ var ErrBlobNotFound = errors.New("blob not found")
 // with created=true (a phantom refcount row), so the primitive guards it.
 var ErrInvalidSha256 = errors.New("invalid sha256")
 
-// ErrBlobBusy is the bounded-retry exhaustion sentinel (B1 review RF1): the
-// instant-upload transaction lost the InnoDB deadlock race (1213) or hit the
+// ErrBlobBusy is the bounded-retry exhaustion sentinel (B1 review RF1),
+// shared by the instant probe (B3) and the direct-upload dedup transaction
+// (B4): the acquire+create tx lost the InnoDB deadlock race (1213) or hit the
 // lock-wait timeout (1205) on every attempt. Nothing was written — MySQL rolls
-// the loser back cleanly — so the client may safely retry the whole probe.
+// the loser back cleanly — so the client may safely retry the whole call
+// (probe re-attempt is byte-free; direct upload re-sends the body). Handlers
+// map it to 409.
 var ErrBlobBusy = errors.New("blob busy, retry")

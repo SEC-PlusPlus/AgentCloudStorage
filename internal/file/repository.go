@@ -44,4 +44,16 @@ type Repository interface {
 	// Object. InnoDB 1213/1205 from the blob lock are classified by the
 	// Service retry loop, not here.
 	InstantCreate(ctx context.Context, ownerID uint64, in InstantInput) (*File, error)
+
+	// DedupCreate (spec B4, §1.3/§4) runs the direct-upload dedup as ONE
+	// transaction — the bytes are already promoted to blobs/<sha> by the
+	// service before the call: AcquireBlob (created → objects row with the
+	// clamped coarse content_type; hit → refcount+1 and the stored row wins),
+	// reservation→usage conversion with CreateWithQuota's exact guarded SQL,
+	// files row insert through the same newInstantFile provenance mapper
+	// (all content fields from the acquired Object). A failed files insert
+	// rolls the refcount move back with it — no ReleaseBlob compensation
+	// exists because none can be needed. InnoDB 1213/1205 are classified by
+	// the Service retry loop, not here.
+	DedupCreate(ctx context.Context, in DedupCreateInput) (*File, error)
 }

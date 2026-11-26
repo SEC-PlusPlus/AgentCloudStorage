@@ -182,6 +182,16 @@ func (h *FileHandler) Upload(c *gin.Context) {
 			return
 		}
 
+		if errors.Is(err, file.ErrBlobBusy) {
+			// B4: the dedup transaction lost every InnoDB lock round against
+			// same-sha concurrency. No row committed, tmp cleaned, the upload
+			// is safely retryable — the same 409 face the instant probe uses.
+			c.JSON(http.StatusConflict, gin.H{
+				"error": "blob busy, retry",
+			})
+			return
+		}
+
 		_ = c.Error(err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "upload file failed",

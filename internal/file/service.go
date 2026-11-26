@@ -3,9 +3,12 @@ package file
 import (
 	"PersonalCloudStorage/internal/storage"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"strings"
 	"time"
@@ -75,6 +78,21 @@ type InstantInput struct {
 	OriginalName string
 	ContentType  string
 	FolderID     uint64
+}
+
+// DedupCreateInput is the direct-upload dedup transaction payload (spec §4,
+// B4). Every content field is computed server-side — the tee hash of the
+// stream and the size storage reports — never from a client header; identity
+// fields come from the multipart request. ContentType is already coarse-
+// filtered by Upload; AcquireBlob additionally clamps it to the column width.
+type DedupCreateInput struct {
+	OwnerID      uint64
+	FolderID     uint64
+	OriginalName string
+	Sha256       string
+	ContentType  string
+	Size         int64
+	ReservedSize int64
 }
 
 type StorageUsageResult struct {
@@ -151,6 +169,12 @@ func (s *Service) DownloadByKey(ctx context.Context, key string) (*DownloadResul
 	}, nil
 }
 
+// Upload streams a direct (≤50MiB) multipart body into a per-upload tmp key
+// while hashing it, promotes the bytes to blobs/<sha> server-side, and only
+// then runs the dedup transaction (spec §1.3/§4, B4): AcquireBlob + reservation
+// convert + files row, all content fields from the committed Object. The 201
+// response shape is unchanged; dedup is invisible to the client except that
+// repeated content costs no extra storage.
 func (s *Service) Upload(ctx context.Context, input UploadInput) (created *File, retErr error) {
 	if input.OwnerID == 0 {
 		return nil, errors.New("owner id is required")
@@ -179,7 +203,11 @@ func (s *Service) Upload(ctx context.Context, input UploadInput) (created *File,
 		return nil, fmt.Errorf("reserve upload quota: %w", err)
 	}
 
-	objectKey := fmt.Sprintf("users/%d/%s", input.OwnerID, uuid.NewString())
+	// All tmp-phase semantics are the pre-B4 ones: reservation before any
+	// byte moves, input.Size caps what Put consumes, the handler's
+	// MaxBytesReader bounds the stream at 50MiB, and every error path below
+	// deletes the stored object and releases the reservation (the defer).
+	tmpKey := fmt.Sprintf("users/%d/tmp-%s", input.OwnerID, uuid.NewString())
 	objectStored := false
 
 	defer func() {
@@ -191,8 +219,8 @@ func (s *Service) Upload(ctx context.Context, input UploadInput) (created *File,
 		defer cancel()
 
 		if objectStored {
-			if err := s.storage.Delete(cleanupCtx, objectKey); err != nil {
-				retErr = errors.Join(retErr, fmt.Errorf("delete orphan object: %w", err))
+			if err := s.storage.Delete(cleanupCtx, tmpKey); err != nil {
+				retErr = errors.Join(retErr, fmt.Errorf("delete tmp object: %w", err))
 			}
 		}
 		if err := s.repo.ReleaseQuota(cleanupCtx, input.OwnerID, input.Size); err != nil {
@@ -200,37 +228,90 @@ func (s *Service) Upload(ctx context.Context, input UploadInput) (created *File,
 		}
 	}()
 
-	objectInfo, err := s.storage.Put(ctx, objectKey, input.Reader, input.Size, contentType)
+	hasher := sha256.New()
+	objectInfo, err := s.storage.Put(ctx, tmpKey, io.TeeReader(input.Reader, hasher), input.Size, contentType)
 	if err != nil {
 		return nil, fmt.Errorf("upload object to storage: %w", err)
 	}
 	objectStored = true
 
-	file := &File{
-		OwnerID:      input.OwnerID,
-		FolderID:     input.FolderID,
-		OriginalName: name,
-		ObjectKey:    objectInfo.Key,
-		Size:         objectInfo.Size,
-		ContentType:  objectInfo.ContentType,
-		ETag:         objectInfo.ETag,
-		Status:       StatusActive,
+	// The tee is the ONLY hash authority (spec v2 dropped the client-declared
+	// X-Content-Sha256 header): it saw exactly the bytes Put consumed from
+	// the stream — no more, even when the declared size lies.
+	sha := hex.EncodeToString(hasher.Sum(nil))
+	blobKey := BlobObjectKey(sha)
+
+	// Copy BEFORE the transaction, UNCONDITIONALLY — even on a dedup hit,
+	// where this copy is a byte-identical atomic overwrite. The spec §4
+	// pseudo-order (tx: AcquireBlob created → Copy) would publish an objects
+	// row pointing at blobs/<sha> before the bytes land there, and a
+	// concurrent instant probe could 201 a file row against missing content
+	// inside that window. Copying first makes every visible objects row
+	// complete-by-construction at zero correctness windows; the accepted
+	// cost is one MinIO-side copy of ≤50MiB (no client bytes) on the hit
+	// path. "Probe the blob, skip the copy on hit" is NOT safe: a
+	// PermanentDelete + blob-gc retirement between probe and tx would leave
+	// created=true for a sha whose bytes were never copied — a phantom blob.
+	if err := s.storage.Copy(ctx, tmpKey, blobKey); err != nil {
+		return nil, fmt.Errorf("promote blob to %s: %w", blobKey, err)
 	}
 
-	if err := s.repo.CreateWithQuota(ctx, file, input.Size); err != nil {
-		return nil, fmt.Errorf("save file and quota: %w", err)
+	// Dedup transaction under the shared B3 bounded-retry policy (contract
+	// 1): every 1213/1205 loss re-runs the WHOLE tx fresh; the MinIO work
+	// above never repeats. Exhaustion answers ErrBlobBusy (handler: 409,
+	// retry-friendly — the client simply uploads again; no row committed,
+	// tmp deleted by the defer, any blobs orphan swept by B5 gc).
+	var lastErr error
+	for attempt := 1; attempt <= blobTxMaxAttempts; attempt++ {
+		if attempt > 1 {
+			timer := time.NewTimer(time.Duration(attempt-1) * blobTxRetryPause)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
+		}
+		record, err := s.repo.DedupCreate(ctx, DedupCreateInput{
+			OwnerID:      input.OwnerID,
+			FolderID:     input.FolderID,
+			OriginalName: name,
+			Sha256:       sha,
+			ContentType:  coarseContentType(contentType),
+			Size:         objectInfo.Size,
+			ReservedSize: input.Size,
+		})
+		if err == nil {
+			// Success: the content lives at blobs/<sha>; tmp is redundant by
+			// construction. Best-effort cleanup — a crash past this point
+			// leaves users/*/tmp-* for cmd/blob-gc (B5 contract: sweep tmp
+			// keys older than the safety window alongside rowless blobs).
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			if derr := s.storage.Delete(cleanupCtx, tmpKey); derr != nil {
+				slog.Warn("delete tmp object after dedup upload", "key", tmpKey, "error", derr)
+			}
+			cancel()
+			return record, nil
+		}
+		if !isBlobLockContention(err) {
+			// Deterministic outcomes surface verbatim so handler Is-mappings
+			// keep working; the defer cleans tmp.
+			return nil, fmt.Errorf("save dedup upload: %w", err)
+		}
+		lastErr = err
 	}
-	return file, nil
+	return nil, fmt.Errorf("direct upload: %w (last: %w)", ErrBlobBusy, lastErr)
 }
 
-// instantUploadMaxAttempts bounds the retry loop over the acquire+create
-// transaction (B1 review RF1). Concurrent same-sha probes take AcquireBlob's
-// documented S→X upgrade deadlock (MySQL 1213) or block into 1205 — the
-// integration suite proved it fires. Retry is cheap (no bytes moved) but must
-// be bounded; exhaustion answers ErrBlobBusy (handler: 409).
+// blobTxMaxAttempts bounds the retry loop over every acquire+create
+// transaction (B1 review RF1): both the B3 instant probe and the B4 direct
+// upload dedup tx. Concurrent same-sha callers take AcquireBlob's documented
+// S→X upgrade deadlock (MySQL 1213) or block into 1205 — the integration
+// suite proved it fires. Retry is cheap (no bytes moved inside the loop) but
+// must be bounded; exhaustion answers ErrBlobBusy (handler: 409).
 const (
-	instantUploadMaxAttempts = 4
-	instantUploadRetryPause  = 2 * time.Millisecond
+	blobTxMaxAttempts = 4
+	blobTxRetryPause  = 2 * time.Millisecond
 )
 
 // isBlobLockContention classifies the RF1 retryable set by driver errno —
@@ -285,9 +366,9 @@ func (s *Service) InstantUpload(ctx context.Context, input InstantInput) (*File,
 	// boundaries live in gorm_repository, HardDeleteWithQuota precedent).
 	// Every retry calls InstantCreate fresh — a poisoned tx is never reused.
 	var lastErr error
-	for attempt := 1; attempt <= instantUploadMaxAttempts; attempt++ {
+	for attempt := 1; attempt <= blobTxMaxAttempts; attempt++ {
 		if attempt > 1 {
-			timer := time.NewTimer(time.Duration(attempt-1) * instantUploadRetryPause)
+			timer := time.NewTimer(time.Duration(attempt-1) * blobTxRetryPause)
 			select {
 			case <-ctx.Done():
 				timer.Stop()

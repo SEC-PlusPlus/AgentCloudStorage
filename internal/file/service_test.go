@@ -168,6 +168,10 @@ func (r *cascadeRepositoryStub) AcquireBlob(*gorm.DB, string, string, int64) (*O
 	return nil, false, errors.New("unexpected AcquireBlob call")
 }
 
+func (r *cascadeRepositoryStub) DedupCreate(context.Context, DedupCreateInput) (*File, error) {
+	return nil, errors.New("unexpected DedupCreate call")
+}
+
 func (r *cascadeRepositoryStub) ReleaseBlob(*gorm.DB, string) (string, bool, error) {
 	return "", false, errors.New("unexpected ReleaseBlob call")
 }
