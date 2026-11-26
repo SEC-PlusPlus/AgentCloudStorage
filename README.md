@@ -16,7 +16,9 @@ Go、Gin、GORM、MySQL、MinIO、Redis、JWT、Viper。
 - 存储用量统计和容量配额
 - Redis 登录尝试限流：同一邮箱与来源地址 10 分钟内最多尝试 5 次，成功登录后清零
 - 单文件分享链接（只读下载）：可选访问密码与有效期、随时撤销；访客端 meta/verify/download 挂 Redis 限流（verify 防爆破 fail-closed，读端点 fail-open），永久删除级联清理 share 行；migration 手动应用规程见 `deploy/README.md`
+- 分享属主管理 UI（Web）：文件行「分享」弹窗（密码 UTF-8 72 字节预检、有效期 永久/1h/1d/7d/30d、成功态链接复制）与 Dock「我的分享」管理页（`/shares`：链接列表、复制链接、撤销即时更新、状态列只标事实态）
 - 秒传与内容去重：`POST /files/instant` SHA-256 探针命中即毫秒建账（不传字节），≤50MiB 直传通道服务端 TeeReader 旁路哈希；相同内容全服务器只存一份内容寻址 blob（`blobs/<sha256>`），refcount 记账，配额照常按 size 计。永久删除只做逻辑层释放，物理回收交给带安全窗的 `cmd/blob-gc`（延迟 GC，杜绝共享 blob 误删）；migration 与 cron 规程见 `deploy/README.md`
+- 秒传前端接线（Web）：<49MiB 直传分支前置浏览器端 `crypto.subtle` SHA-256 → `POST /files/instant` 探针，命中毫秒建账并给队列行 `⚡秒传` 徽标；未命中或探针任何失败（含 3s 硬超时）静默降级普通直传，错误仍由直传通道单发，≥49MiB 分片路径不探针
 - 单文件资料问答（M7/P2）：问答由独立 Python agent 服务（`agent/`）承载，支持非流式与 SSE 流式（`stream: true`）；Go 侧双档降级，agent 瞬时故障自动回落内置本地 eino 档
 
 ## 本地 Redis
