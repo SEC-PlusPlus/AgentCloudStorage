@@ -33,15 +33,20 @@ type loginLimiterStub struct {
 	resetErr   error
 	allowCalls int
 	resetCalls int
+	// Review round-1 MINOR-1：记录两路 addr，钉死 Allow/Reset 同键且为无端口 ClientIP。
+	allowAddr string
+	resetAddr string
 }
 
-func (l *loginLimiterStub) Allow(context.Context, string, string) (bool, error) {
+func (l *loginLimiterStub) Allow(_ context.Context, _ string, addr string) (bool, error) {
 	l.allowCalls++
+	l.allowAddr = addr
 	return l.allowed, l.allowErr
 }
 
-func (l *loginLimiterStub) Reset(context.Context, string, string) error {
+func (l *loginLimiterStub) Reset(_ context.Context, _ string, addr string) error {
 	l.resetCalls++
+	l.resetAddr = addr
 	return l.resetErr
 }
 
@@ -103,5 +108,13 @@ func TestSuccessfulLoginResetsLimiter(t *testing.T) {
 	response, repo := testLoginRequest(t, limiter, "correct-password")
 	if response.Code != http.StatusOK || repo.calls != 1 || limiter.resetCalls != 1 {
 		t.Fatalf("expected 200 and reset; status=%d repoCalls=%d resetCalls=%d", response.Code, repo.calls, limiter.resetCalls)
+	}
+	// ClientIP 同源修正（spec §6）：httptest 请求 RemoteAddr=192.0.2.1:1234 且无 XFF，
+	// 两路都必须拿到无端口的 ClientIP，且 Allow/Reset 同键 —— 否则 Reset 删错桶。
+	if limiter.allowAddr != "192.0.2.1" {
+		t.Errorf("Allow addr = %q, want portless ClientIP 192.0.2.1", limiter.allowAddr)
+	}
+	if limiter.resetAddr != limiter.allowAddr {
+		t.Errorf("Reset addr = %q, must equal Allow addr %q (same bucket)", limiter.resetAddr, limiter.allowAddr)
 	}
 }

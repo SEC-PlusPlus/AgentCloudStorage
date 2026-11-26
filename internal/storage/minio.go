@@ -102,6 +102,40 @@ func (s *MinIOStorage) Delete(ctx context.Context, key string) error {
 	return s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{})
 }
 
+// List walks every object under prefix recursively (B5, cmd/blob-gc). Errors
+// return raw like the other verbs — ToErrorResponse-friendly. LastModified is
+// the GC age authority; multipart/dedup keys alike surface uniformly.
+func (s *MinIOStorage) List(ctx context.Context, prefix string) ([]ObjectInfo, error) {
+	var out []ObjectInfo
+	for item := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{
+		Prefix:    prefix,
+		Recursive: true,
+	}) {
+		if item.Err != nil {
+			return nil, item.Err
+		}
+		out = append(out, ObjectInfo{
+			Key:          item.Key,
+			Size:         item.Size,
+			ETag:         item.ETag,
+			LastModified: item.LastModified,
+		})
+	}
+	return out, nil
+}
+
+// Copy 走 MinIO 服务端复制（x-amz-copy-source），字节不经过本客户端。
+// 错误原样返回（同 Put/Get/Stat/Delete）：本文件判定错误的惯例是
+// minio.ToErrorResponse(err)，它是裸类型断言、不解包 %w——一旦 wrap，
+// NoSuchKey 判定会退化成零值；保持裸错误让两种检法都可用。
+func (s *MinIOStorage) Copy(ctx context.Context, srcKey, dstKey string) error {
+	_, err := s.client.CopyObject(ctx,
+		minio.CopyDestOptions{Bucket: s.bucket, Object: dstKey},
+		minio.CopySrcOptions{Bucket: s.bucket, Object: srcKey},
+	)
+	return err
+}
+
 func (s *MinIOStorage) StartMultipart(ctx context.Context, key string, contentType string) (string, error) {
 	core := minio.Core{Client: s.client}
 	return core.NewMultipartUpload(ctx, s.bucket, key, minio.PutObjectOptions{ContentType: contentType})
@@ -166,6 +200,6 @@ func (s *MinIOStorage) AbortMultipart(ctx context.Context, key string, uploadID 
 	return err
 }
 
-// 编译期检查: MinIOStorage 是否完整实现了 ObjectStorage 的四个方法。
+// 编译期检查: MinIOStorage 是否完整实现了 ObjectStorage 与 MultipartStorage。
 var _ ObjectStorage = (*MinIOStorage)(nil)
 var _ MultipartStorage = (*MinIOStorage)(nil)

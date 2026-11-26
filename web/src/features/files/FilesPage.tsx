@@ -39,7 +39,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/glinui/components/alert-dialog'
-import { Download, Eye, FolderInput, Pencil, Sparkles, Trash2 } from 'lucide-react'
+import { Download, Eye, FolderInput, Pencil, Share2, Sparkles, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/glinui/components/badge'
 import { Button } from '@/components/glinui/components/button'
 import { DropOverlay } from '@/components/app/DropOverlay'
@@ -68,6 +68,7 @@ import { PreviewSheet } from './PreviewSheet'
 import { RenameDialog } from './RenameDialog'
 import { RowContextMenu } from './RowContextMenu'
 import { RowToolbar } from './RowToolbar'
+import { ShareDialog } from './ShareDialog'
 import { useUploadManager } from './useUploadManager'
 import { FilesTable, LIST_SCROLL_OFFSET_PX, searchSourceLabel } from './FilesTable'
 import { RecentStrip, STRIP_HEIGHT_PX, recentCards } from './RecentStrip'
@@ -120,6 +121,8 @@ export function FilesPage() {
   const [contextMenu, setContextMenu] = useState<{ row: FileRow; pos: { x: number; y: number } } | null>(null)
   const [renameTarget, setRenameTarget] = useState<FileRow | null>(null)
   const [moveTarget, setMoveTarget] = useState<FileRow | null>(null)
+  // W1 属主分享弹窗状态（与 rename/move 同纪律；分享不改文件视图，无失效键需求）。
+  const [shareTarget, setShareTarget] = useState<FileRow | null>(null)
   const [deleteTargets, setDeleteTargets] = useState<FileRow[] | null>(null)
   // Task 10 预览接线：双击行 / 右键「预览」/ 单击·Enter 文件名按钮（⑭）三路同源汇入 sheet。
   const [previewRow, setPreviewRow] = useState<FileRow | null>(null)
@@ -190,6 +193,8 @@ export function FilesPage() {
           { label: '下载', icon: Download, disabled: !isFile, reason: '文件夹不可下载。', onClick: () => void runDownload(selection) },
           { label: '重命名', icon: Pencil, onClick: () => setRenameTarget(row) },
           { label: '移动', icon: FolderInput, onClick: () => setMoveTarget(row) },
+          // W1：分享=单文件动作，文件夹行置灰带 reason（⑮ 模式同预览/下载）。
+          { label: '分享', icon: Share2, disabled: !isFile, reason: '文件夹不支持分享。', onClick: () => setShareTarget(row) },
           { label: '问 AI', icon: Sparkles, disabled: !askGate.ok, reason: askGate.reason, onClick: () => openAsk(row) },
           { label: '移入回收站', icon: Trash2, danger: true, onClick: () => setDeleteTargets([row]) },
         ]
@@ -436,6 +441,7 @@ export function FilesPage() {
         onDownload={(row) => void runDownload([row])}
         onRename={setRenameTarget}
         onMove={setMoveTarget}
+        onShare={setShareTarget}
         onTrash={(row) => setDeleteTargets([row])}
         onAsk={openAsk} // Task 12：菜单项 canAsk 门控启用（不合格=disabled 不可 select）
       />
@@ -457,6 +463,7 @@ export function FilesPage() {
         fromFolder={moveTarget ? sourceFolderOf([moveTarget.id])[0] : undefined}
         onClose={() => setMoveTarget(null)}
       />
+      <ShareDialog target={shareTarget} onClose={() => setShareTarget(null)} />
       <AlertDialog
         open={deleteTargets !== null}
         onOpenChange={(open) => {

@@ -17,7 +17,7 @@ import {
   Separator,
   Trigger,
 } from '@radix-ui/react-context-menu'
-import { Download, Eye, FolderInput, Pencil, Sparkles, Trash2 } from 'lucide-react'
+import { Download, Eye, FolderInput, Pencil, Share2, Sparkles, Trash2 } from 'lucide-react'
 import { canAsk } from '@/features/qa/qa-state'
 import type { FileRow } from './useFileRows'
 
@@ -30,6 +30,8 @@ export interface RowContextMenuProps {
   onDownload(row: FileRow): void
   onRename(row: FileRow): void
   onMove(row: FileRow): void
+  /** W1 属主分享——仅文件行出现（文件夹/回收站无入口；builder-check：浮条不放，此处+面板双载体）。 */
+  onShare(row: FileRow): void
   onTrash(row: FileRow): void
   /** 问 AI——Task 12 接线：项仅 canAsk.ok 可用（Radix 菜单项 disabled 即不可 select，无需 tooltip）。 */
   onAsk(row: FileRow): void
@@ -58,6 +60,7 @@ export function RowContextMenu({
   onDownload,
   onRename,
   onMove,
+  onShare,
   onTrash,
   onAsk,
 }: RowContextMenuProps) {
@@ -100,6 +103,9 @@ export function RowContextMenu({
                 </Item>
                 <Item className={MENU_ITEM_CLASS} onSelect={() => onDownload(row)}>
                   <Download size={14} /> 下载
+                </Item>
+                <Item className={MENU_ITEM_CLASS} onSelect={() => onShare(row)}>
+                  <Share2 size={14} /> 分享
                 </Item>
                 <Separator className={MENU_SEPARATOR_CLASS} />
               </>

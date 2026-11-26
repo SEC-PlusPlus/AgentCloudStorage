@@ -15,8 +15,17 @@
 //   非 404/409、startMultipart 三处预-loop 抛出——旧移植此处不发声，队列行冻结「上传中」、busy 恒真）；
 // · 分片失败广播：内部 AbortController 中继 deps.signal 传入 uploadPart，首个真失败即掐兄弟 lane
 //   在途请求并静默终止其后续拉取；lane 全部停稳（allSettled）后才上抛，failed 之后不再有 percent emission。
+// W3（秒传探针接线，spec §1.2）：仅 <49MiB 直传分支前置「arrayBuffer → sha256Hex → instantProbe」探针段——
+// 命中(201)→ done + instant=true（零字节，uploadFile 绝不调用）；未命中/任何失败/旧环境无 subtle → 静默降级，
+// 既有直传流程逐字段不变；探针期间任务保持 queued 0%（不新增状态），取消并入既有 cancelled 分支。
+// 分片（≥49MiB）路径零改动。sha256Hex/instantProbe 为 UploadDeps 注入点（真实 adapter 不进单测，家规同 Task 8）。
 import { ApiError } from '@/api/client'
-import type { MultipartUploadProgress, MultipartUploadSession } from '@/api/storage'
+import {
+  INSTANT_PROBE_TIMEOUT_MS,
+  type InstantProbeInput,
+  type MultipartUploadProgress,
+  type MultipartUploadSession,
+} from '@/api/storage'
 
 /** 旧 497 行：`file.size >= 49 * 1024 * 1024` 走 multipart（为 multipart/form-data 封框留余量，后端 50MiB 上限）。 */
 export const MULTIPART_THRESHOLD_BYTES = 49 * 1024 * 1024
@@ -42,7 +51,12 @@ export interface UploadTask {
   percent: number
   status: UploadTaskStatus
   error?: string
+  /** W3：该任务经秒传探针命中（服务端零字节建账）。队列行内「⚡秒传」徽标据此渲染（spec §1.2）。 */
+  instant?: boolean
 }
+
+/** 探针裁决（spec §2 deps 契约）：linked=201 命中 / miss=200 未命中。其余 HTTP 失败面以 throw 表达。 */
+export type InstantProbeResult = 'linked' | 'miss'
 
 export interface UploadStorage {
   read(): SavedUpload[]
@@ -60,6 +74,12 @@ export interface UploadDeps {
   storage: UploadStorage
   signal: AbortSignal
   partConcurrency?: number
+  // W3 秒传探针注入点（spec §1.2/§2）：编排逻辑纯 fake 可测，真实实现见 lib/crypto.ts 与 api/storage.ts
+  // （薄 adapter 不进单测的家规沿 Task 8「零真网络」惯例）。
+  /** 对直传文件的完整字节做 SHA-256 hex。失败（无 subtle 的旧环境/内存拒绝）由探针段 catch 吞掉降级。 */
+  sha256Hex(buffer: ArrayBuffer): Promise<string>
+  /** POST /files/instant。201→'linked'（零字节入账）；200 {exists:false}→'miss'；其余 throw（同样降级）。 */
+  instantProbe(input: InstantProbeInput): Promise<InstantProbeResult>
 }
 
 /** 任务 id：仅编排内部标识（队列层以自己的行 id 覆写，见 useUploadManager）。不用 crypto.randomUUID——jsdom 版本敏感。 */
@@ -71,6 +91,42 @@ function nextTaskId(): string {
 
 function abortError(): DOMException {
   return new DOMException('Upload cancelled', 'AbortError') // 旧 543 行同款异常
+}
+
+/**
+ * W3：把探针段的每个 await 点包进 abort 竞速——signal 触发即 reject，取消**立刻**收敛 cancelled，
+ * 不必等 arrayBuffer/sha256Hex/instantProbe 承诺自然落定（49MiB 哈希可达秒级，探针是网络请求）。
+ * 被弃置的内层 promise 结果一律丢弃；监听器带 once + 完成后摘除，无泄漏。
+ */
+async function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) throw abortError()
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(abortError())
+    signal.addEventListener('abort', onAbort, { once: true })
+    const detach = (): void => signal.removeEventListener('abort', onAbort)
+    promise.then(
+      (value) => { detach(); resolve(value) },
+      (error) => { detach(); reject(error) },
+    )
+  })
+}
+
+/**
+ * RF1（评审修复轮 1）：探针网络段封顶竞速——instantProbe 永不落定（网络黑洞/DB 卡死，
+ * 或 dep 实现漏了自带超时）时于 INSTANT_PROBE_TIMEOUT_MS 强制 reject → 汇入既有探针 catch
+ * 静默降级直传（deps.signal 未 abort ⇒ 不误入 cancelled 分支），队列绝不再被挂死的探针钉在 queued 0%。
+ * 与 api/storage.ts 真 adapter 的 AbortSignal.timeout 同值双保险；正常落定即摘表，不残留计时器。
+ */
+function withinProbeWindow<T>(promise: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return new Promise<T>((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error('instant probe timed out')), INSTANT_PROBE_TIMEOUT_MS)
+    const detach = (): void => clearTimeout(timer)
+    promise.then(
+      (value) => { detach(); resolve(value) },
+      (error) => { detach(); reject(error) },
+    )
+  })
 }
 
 function messageOf(error: unknown): string {
@@ -115,7 +171,8 @@ export function makeLocalStorageUploadStorage(uid: number | string): UploadStora
 /**
  * 单文件上传编排（旧 uploadFiles 循环体 + uploadLargeFile 全分支）。
  * 收敛约定：done/cancelled 走 resolve；reject 仅限真失败，且外层统一先 emit failed（修复轮 1 / Critical-1）。
- * cancelled 的 UI 播报（toast「已取消当前大文件上传。」）与批量记账在队列层（useUploadManager），此处纯逻辑。
+ * cancelled 的 UI 播报（toast「上传已取消。」——W3 起新文案，spec §1.2-5）与批量记账在队列层
+ * （useUploadManager），此处纯逻辑。
  */
 export async function runUpload(
   file: File,
@@ -130,10 +187,61 @@ export async function runUpload(
   }
 
   const orchestrate = async (): Promise<void> => {
-    // —— 直传路径（旧 497-499 行的 else 分支）：单请求，旧版无中止通道（uploadAbort 仅分片流持有），原样移植；
-    // 抛出（413/507 等原始 ApiError）→ 外层统一 emit failed ——
+    // —— 直传路径（旧 497-499 行的 else 分支）+ W3 秒传探针前置（spec §1.2）——
+    // 仅 fresh 直传探针：SavedUpload 续传语义只存在于分片通道（直传本就无存储记录，旧版如此），
+    // 故「resume 跳过探针」在此天然成立——若任务曾中断，恢复走的是分片分支的服务端会话，不重叠。
+    // 探针期间任务保持 queued 0%（builder-check：不新增状态）；signal 检查在 digest 前后各一次，
+    // 期间取消 → 既有 cancelled 收敛（不 reject、不发任何后续 dep）。
     if (file.size < MULTIPART_THRESHOLD_BYTES) {
-      emit({ status: 'uploading' })
+      if (deps.signal.aborted) {
+        emit({ status: 'cancelled' })
+        return
+      }
+      let linked = false
+      try {
+        const buffer = await untilAborted(file.arrayBuffer(), deps.signal)
+        if (deps.signal.aborted) {
+          emit({ status: 'cancelled' })
+          return
+        }
+        const sha256 = await untilAborted(deps.sha256Hex(buffer), deps.signal)
+        if (deps.signal.aborted) {
+          emit({ status: 'cancelled' }) // digest 后即取消（检查点之二）：探针不再发起
+          return
+        }
+        const result = await untilAborted(
+          withinProbeWindow( // RF1：探针 3s 封顶，永不落定=静默降级（abort 取消时残留计时器≤3s 自熄，无害）
+            deps.instantProbe({
+              sha256,
+              original_name: file.name,
+              content_type: file.type || 'application/octet-stream', // startMultipartUpload 同款兜底
+              folder_id: folderID,
+            }),
+          ),
+          deps.signal,
+        )
+        if (deps.signal.aborted) {
+          emit({ status: 'cancelled' }) // 探针在途取消：迟到的 201 也不再动行（取消语义优先）
+          return
+        }
+        linked = result === 'linked'
+      } catch (error) {
+        // 哈希/探针任何失败（无 subtle / 内存拒绝 / 401/404/409/507/网络 / 形状异常 / RF1 超时）与
+        // untilAborted 掐出的 AbortError 都汇到这里：signal 优先判取消，否则静默降级直传
+        // （spec §1.2-2：配额/登录错误面由随后的 uploadFile 原样复现，用户零双弹）。
+        if (deps.signal.aborted) {
+          emit({ status: 'cancelled' })
+          return
+        }
+        // MINOR-2（评审修复轮 1）：降级对用户绝对静默，但 DEV 下留痕——否则生产旁路排查时
+        // 「秒传从未命中」与「环境无 subtle」不可区分。仅 console.debug，UI/测试断言零影响。
+        if (import.meta.env.DEV) console.debug('instant probe degraded', error)
+      }
+      if (linked) {
+        emit({ status: 'done', percent: 100, instant: true }) // 命中=零字节完成（批尾 toast 权威，此处不弹）
+        return
+      }
+      emit({ status: 'uploading' }) // 未命中/降级：以下直传流程与旧行为逐字段一致
       await deps.uploadFile(file, folderID)
       emit({ status: 'done', percent: 100 })
       return

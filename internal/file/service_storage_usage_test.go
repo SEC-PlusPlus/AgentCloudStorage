@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"gorm.io/gorm"
 )
 
 // usageRepositoryStub implements Repository with the quota/usage methods backed
@@ -42,7 +44,7 @@ func (*usageRepositoryStub) GetDeletedByID(context.Context, uint64, uint64) (*Fi
 	return nil, errors.New("unexpected GetDeletedByID call")
 }
 
-func (*usageRepositoryStub) HardDeleteWithQuota(context.Context, uint64, uint64) error {
+func (*usageRepositoryStub) HardDeleteWithQuota(context.Context, uint64, uint64, ...func(*gorm.DB) error) error {
 	return errors.New("unexpected HardDeleteWithQuota call")
 }
 
@@ -84,8 +86,28 @@ func (*usageRepositoryStub) ReleaseQuota(context.Context, uint64, int64) error {
 	return errors.New("unexpected ReleaseQuota call")
 }
 
-func (*usageRepositoryStub) CreateWithQuota(context.Context, *File, int64) error {
-	return errors.New("unexpected CreateWithQuota call")
+func (*usageRepositoryStub) HardDeleteWithBlobRelease(context.Context, uint64, uint64, string, ...func(*gorm.DB) error) error {
+	return errors.New("unexpected HardDeleteWithBlobRelease call")
+}
+
+func (*usageRepositoryStub) FindBlob(context.Context, string) (*Object, error) {
+	return nil, ErrBlobNotFound
+}
+
+func (*usageRepositoryStub) AcquireBlob(*gorm.DB, string, string, int64) (*Object, bool, error) {
+	return nil, false, errors.New("unexpected AcquireBlob call")
+}
+
+func (*usageRepositoryStub) ReleaseBlob(*gorm.DB, string) (string, bool, error) {
+	return "", false, errors.New("unexpected ReleaseBlob call")
+}
+
+func (*usageRepositoryStub) InstantCreate(context.Context, uint64, InstantInput) (*File, error) {
+	return nil, errors.New("unexpected InstantCreate call")
+}
+
+func (*usageRepositoryStub) DedupCreate(context.Context, DedupCreateInput) (*File, error) {
+	return nil, errors.New("unexpected DedupCreate call")
 }
 
 func TestStorageUsageReturnsUsedAndQuotaBytes(t *testing.T) {

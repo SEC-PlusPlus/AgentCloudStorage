@@ -108,7 +108,9 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		})
 		return
 	}
-	allowed, err := h.loginLimiter.Allow(c.Request.Context(), request.Email, c.Request.RemoteAddr)
+	// c.ClientIP() 而非 RemoteAddr：nginx 同机反代下 RemoteAddr 恒为 127.0.0.1，
+	// 会让全部访客塌缩进同一个限流桶（spec §6 同源修正；无端口形式与 loginAttemptKey 兼容）。
+	allowed, err := h.loginLimiter.Allow(c.Request.Context(), request.Email, c.ClientIP())
 	if err != nil {
 		_ = c.Error(err)
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "login temporarily unavailable"})
@@ -147,7 +149,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 		return
 	}
-	if err := h.loginLimiter.Reset(c.Request.Context(), request.Email, c.Request.RemoteAddr); err != nil {
+	if err := h.loginLimiter.Reset(c.Request.Context(), request.Email, c.ClientIP()); err != nil {
 		_ = c.Error(err)
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "login temporarily unavailable"})
 		return

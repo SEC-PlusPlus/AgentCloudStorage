@@ -4,11 +4,16 @@
 export interface RouteGuardMeta {
   requiresAuth?: boolean
   guestOnly?: boolean
+  /** 公开路由（Task A7 访客下载页 /d/:token）：登录与否一律放行，无需会话即可直达。 */
+  public?: boolean
 }
 
 export type GuardDecision = true | '/login' | '/'
 
 export function canAccess(meta: RouteGuardMeta, authed: boolean): GuardDecision {
+  // public 最先短路：访客页对任意会话状态可达。
+  // public 与 requiresAuth/guestOnly 并存属配置错误（实际不存在），此序仅保证决策函数对任意输入总有确定结果。
+  if (meta.public) return true
   // requiresAuth 与 guestOnly 同时出现时 requiresAuth 优先短路（旧 router 亦按 meta.requiresAuth 先判；
   // 二者并存的 meta 实际不存在，此分支仅保证决策函数对任意输入总有一个确定结果）
   if (meta.requiresAuth) return authed ? true : '/login'

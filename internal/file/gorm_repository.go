@@ -108,43 +108,98 @@ func (r *GORMRepository) HardDeleteWithQuota(
 	ctx context.Context,
 	ownerID uint64,
 	fileID uint64,
+	extra ...func(tx *gorm.DB) error,
 ) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var record File
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("id = ? AND owner_id = ? AND status = ?",
-				fileID, ownerID, StatusDeleted).
-			First(&record).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrFileNotFound
-		}
-		if err != nil {
-			return fmt.Errorf("get file for permanent deletion: %w", err)
-		}
+		return r.hardDeleteTx(tx, ownerID, fileID, extra...)
+	})
+}
 
-		if record.Size > 0 {
-			result := tx.Table("users").
-				Where("id = ? AND used_bytes >= ?", ownerID, record.Size).
-				UpdateColumn("used_bytes", gorm.Expr("used_bytes - ?", record.Size))
-			if result.Error != nil {
-				return fmt.Errorf("decrease used quota: %w", result.Error)
-			}
-			if result.RowsAffected == 0 {
-				return errors.New("used quota is inconsistent with file size")
-			}
+// HardDeleteWithBlobRelease (B5, spec §1.3/§1.4) is the dedup-row delete:
+// ReleaseBlob runs FIRST inside the transaction, so the lock prefix is
+// objects→files(row SELECT FOR UPDATE)→users (B5 review M1: the shared
+// hardDeleteTx tail locks the file row before the users row — kept exactly as
+// the legacy SQL has always done it; only the objects-first PREFIX matters for
+// B3-M4, because both this and InstantCreate/DedupCreate acquire the blob row
+// before anything else, so a delete racing an instant upload on one sha
+// serialises there instead of deadlocking across layers). Whatever 1213/1205
+// remains is retried by the Service loop like the acquire paths.
+//
+// The zero-refcount outcome is (row deleted, blob untouched) — this method
+// cannot reach MinIO and none of its callers do for sha!=nil rows: physical
+// reclamation is cmd/blob-gc's exclusive job (the §1.4 delayed-GC ruling
+// forbids a late storage.Delete from killing a just-rebuilt same-sha object).
+func (r *GORMRepository) HardDeleteWithBlobRelease(
+	ctx context.Context,
+	ownerID uint64,
+	fileID uint64,
+	sha256 string,
+	extra ...func(tx *gorm.DB) error,
+) error {
+	if err := validateBlobSha256(sha256); err != nil {
+		return err
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if _, _, err := r.ReleaseBlob(tx, sha256); err != nil {
+			return err
 		}
+		return r.hardDeleteTx(tx, ownerID, fileID, extra...)
+	})
+}
 
-		result := tx.Where("id = ? AND owner_id = ? AND status = ?",
+// hardDeleteTx is the shared row/quota half of both permanent-delete paths:
+// lock the deleted-status row, guarded users decrement, row delete, extra
+// hooks after the row is provably gone (spec §5.4). Splitting it keeps
+// HardDeleteWithQuota's legacy SQL byte-for-byte while the dedup twin prepends
+// the blob release.
+func (r *GORMRepository) hardDeleteTx(
+	tx *gorm.DB,
+	ownerID uint64,
+	fileID uint64,
+	extra ...func(tx *gorm.DB) error,
+) error {
+	var record File
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND owner_id = ? AND status = ?",
 			fileID, ownerID, StatusDeleted).
-			Delete(&File{})
+		First(&record).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrFileNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("get file for permanent deletion: %w", err)
+	}
+
+	if record.Size > 0 {
+		result := tx.Table("users").
+			Where("id = ? AND used_bytes >= ?", ownerID, record.Size).
+			UpdateColumn("used_bytes", gorm.Expr("used_bytes - ?", record.Size))
 		if result.Error != nil {
-			return fmt.Errorf("hard delete file: %w", result.Error)
+			return fmt.Errorf("decrease used quota: %w", result.Error)
 		}
 		if result.RowsAffected == 0 {
-			return ErrFileNotFound
+			return errors.New("used quota is inconsistent with file size")
 		}
-		return nil
-	})
+	}
+
+	result := tx.Where("id = ? AND owner_id = ? AND status = ?",
+		fileID, ownerID, StatusDeleted).
+		Delete(&File{})
+	if result.Error != nil {
+		return fmt.Errorf("hard delete file: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return ErrFileNotFound
+	}
+
+	// Hooks only run once the file row is provably gone, still in-tx:
+	// a failing hook rolls the whole permanent delete back (spec §5.4).
+	for _, hook := range extra {
+		if err := hook(tx); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *GORMRepository) ListByFolderAndStatus(ctx context.Context, ownerID uint64, folderID uint64, status Status, limit int, offset int) ([]File, int64, error) {
@@ -318,45 +373,300 @@ func (r *GORMRepository) ReleaseQuota(ctx context.Context, ownerID uint64, size 
 	return nil
 }
 
-func (r *GORMRepository) CreateWithQuota(
-	ctx context.Context,
-	file *File,
-	reservedSize int64,
-) error {
-	if file == nil {
-		return errors.New("file is required")
+// convertReservationTx is the guarded reservation→usage update, lifted
+// verbatim from the pre-B4 CreateWithQuota (B4) and shared with DedupCreate so
+// the direct-upload quota semantics are bit-identical before and after the
+// dedup rework. (CreateWithQuota itself left the Repository in B5 — zero
+// production callers remained once Upload moved to DedupCreate.)
+//
+// B3-M3 / B5 contract 4: a 0-rows outcome is a QUOTA verdict, not a mystery —
+// either the reservation vanished or concurrent use pushed the user over
+// quota — so it answers ErrQuotaExceeded and the handler keeps its 507 face
+// for both the instant and the direct-upload path (same code path rule).
+func convertReservationTx(tx *gorm.DB, ownerID uint64, reservedSize, fileSize int64) error {
+	result := tx.Table("users").
+		Where(
+			"id = ? AND reserved_bytes >= ? "+
+				"AND used_bytes <= quota_bytes "+
+				"AND ? <= quota_bytes - used_bytes",
+			ownerID, reservedSize, fileSize,
+		).
+		Updates(map[string]any{
+			"reserved_bytes": gorm.Expr("reserved_bytes - ?", reservedSize),
+			"used_bytes":     gorm.Expr("used_bytes + ?", fileSize),
+		})
+	if result.Error != nil {
+		return fmt.Errorf("convert reserved quota: %w", result.Error)
 	}
-	if reservedSize < 0 || file.Size < 0 || file.Size > reservedSize {
-		return errors.New("invalid file size or reservation")
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("quota reservation not found or quota exceeded: %w", ErrQuotaExceeded)
+	}
+	return nil
+}
+
+func (r *GORMRepository) FindBlob(ctx context.Context, sha256 string) (*Object, error) {
+	var obj Object
+	err := r.db.WithContext(ctx).Where("sha256 = ?", sha256).First(&obj).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrBlobNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find blob: %w", err)
+	}
+	return &obj, nil
+}
+
+// AcquireBlob inserts-or-adopts the objects row for sha256 and returns it
+// locked for the remainder of tx, with refcount already incremented (new row:
+// 1, existing row: +1). created reports whether this call inserted the row.
+//
+// Two-step per spec §5: INSERT IGNORE first, then SELECT ... FOR UPDATE.
+// RowsAffected is trustworthy for "created" here and only here: the go-sql-
+// driver reports changed rows, so INSERT IGNORE returns exactly 1 when the
+// row was inserted and 0 when the duplicate was ignored — an unambiguous
+// boolean. The usual upsert alternative is not: ON DUPLICATE KEY UPDATE would
+// report 1/2/0 depending on whether the duplicate update changes anything,
+// which cannot distinguish "pre-existing" from "inserted".
+//
+// DEADLOCK CONTRACT (B1 review RF1): INSERT IGNORE against an EXISTING
+// committed duplicate takes a SHARED lock on the row, and the following
+// SELECT ... FOR UPDATE then requests exclusive — the classic S→X upgrade
+// deadlock (MySQL errno 1213) when two callers probe one popular blob, and
+// equally between an adopter and a concurrent releaser. The primitive stays
+// free of retry logic; CALLERS MUST treat 1213 (deadlock) and 1205
+// (lock-wait timeout) as retryable: retry the whole surrounding transaction
+// or surface 409 (B3 InstantUpload / B4 upload). Nothing is corrupted on
+// either outcome — MySQL rolls the loser back cleanly.
+func (r *GORMRepository) AcquireBlob(tx *gorm.DB, sha256, contentType string, size int64) (*Object, bool, error) {
+	// Input guards live in the primitive, not in any handler regex (RF2):
+	// INSERT IGNORE coerces a malformed sha into a garbage PK with
+	// created=true (phantom refcount row) and silently truncates an
+	// over-long content_type, diverging from files.content_type (255 wide).
+	if err := validateBlobSha256(sha256); err != nil {
+		return nil, false, err
+	}
+	if size < 0 {
+		return nil, false, fmt.Errorf("acquire blob %s: negative size", sha256)
+	}
+	// Clamp-vs-reject decision: CLAMP (see ClampContentType) so a long MIME
+	// cannot hard-fail an otherwise-valid upload; callers must write the
+	// files row from the returned Object.ContentType for consistency.
+	contentType = ClampContentType(contentType)
+
+	result := tx.Clauses(clause.Insert{Modifier: "IGNORE"}).Create(&Object{
+		Sha256:      sha256,
+		ObjectKey:   BlobObjectKey(sha256),
+		ContentType: contentType,
+		Size:        size,
+		Refcount:    1,
+	})
+	if result.Error != nil {
+		return nil, false, fmt.Errorf("acquire blob insert: %w", result.Error)
+	}
+	created := result.RowsAffected == 1
+
+	// Lock the row (or block until the racing inserter commits) so the
+	// refcount read-back and increment are serialised against ReleaseBlob.
+	var obj Object
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("sha256 = ?", sha256).First(&obj).Error
+	if err != nil {
+		return nil, false, fmt.Errorf("acquire blob lock: %w", err)
 	}
 
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if reservedSize > 0 {
+	if !created {
+		if err := tx.Model(&Object{}).Where("sha256 = ?", sha256).
+			UpdateColumn("refcount", gorm.Expr("refcount + 1")).Error; err != nil {
+			return nil, false, fmt.Errorf("acquire blob refcount: %w", err)
+		}
+		obj.Refcount++
+	}
+	return &obj, created, nil
+}
+
+// newInstantFile is the single mapper from an acquired Object to the files
+// row an instant probe creates (B1 contract #2): ObjectKey/Size/ContentType/
+// ETag/Sha256 ALL come from the committed row — never re-derived from the
+// probe body. The service retry loop and this repository share it so the
+// fake and the real tx can never drift on field provenance.
+func newInstantFile(ownerID uint64, in InstantInput, obj *Object) *File {
+	sha := obj.Sha256
+	return &File{
+		OwnerID:      ownerID,
+		FolderID:     in.FolderID,
+		OriginalName: in.OriginalName,
+		ObjectKey:    obj.ObjectKey,
+		Sha256:       &sha,
+		Size:         obj.Size,
+		ContentType:  obj.ContentType,
+		ETag:         obj.Sha256,
+		Status:       StatusActive,
+	}
+}
+
+// InstantCreate runs the whole instant-upload probe as one transaction
+// (spec §1.3 hit path, §4 flow, §5 tx boundary precedent: HardDeleteWithQuota):
+//
+//  1. locked read of the objects row — a miss is ErrBlobNotFound and NOTHING
+//     else is touched (no phantom adopt: AcquireBlob would happily INSERT
+//     IGNORE a row for content nobody uploaded);
+//  2. AcquireBlob refcount+1 with the row's own content_type/size (B1 clamps
+//     inside the primitive; the probe's declared type never overwrites the
+//     first uploader's committed value);
+//  3. quota consume: used_bytes += size guarded by used_bytes + size <=
+//     quota_bytes (spec §1.3 decision 1 — instant files charge the logical
+//     quota like real uploads). Zero-size blobs skip the update (the guarded
+//     UPDATE would match 0 changed rows and be indistinguishable from an
+//     over-quota user; nothing to charge anyway).
+//  4. files row via newInstantFile — every content field from the Object.
+//
+// The S→X upgrade inside AcquireBlob can surface MySQL 1213/1205 under
+// concurrent same-sha probes (B1 review RF1, integration-proven): this
+// method does NOT retry — the Service classifies with errors.As on
+// *mysql.MySQLError and re-runs the whole transaction (fresh call = fresh tx).
+func (r *GORMRepository) InstantCreate(ctx context.Context, ownerID uint64, in InstantInput) (*File, error) {
+	var created *File
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing Object
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("sha256 = ?", in.Sha256).
+			First(&existing).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrBlobNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("instant find blob: %w", err)
+		}
+
+		obj, _, err := r.AcquireBlob(tx, existing.Sha256, existing.ContentType, existing.Size)
+		if err != nil {
+			return err
+		}
+
+		if obj.Size > 0 {
 			result := tx.Table("users").
-				Where(
-					"id = ? AND reserved_bytes >= ? "+
-						"AND used_bytes <= quota_bytes "+
-						"AND ? <= quota_bytes - used_bytes",
-					file.OwnerID, reservedSize, file.Size,
-				).
-				Updates(map[string]any{
-					"reserved_bytes": gorm.Expr("reserved_bytes - ?", reservedSize),
-					"used_bytes":     gorm.Expr("used_bytes + ?", file.Size),
-				})
-
+				Where("id = ? AND used_bytes + ? <= quota_bytes", ownerID, obj.Size).
+				UpdateColumn("used_bytes", gorm.Expr("used_bytes + ?", obj.Size))
 			if result.Error != nil {
-				return fmt.Errorf("convert reserved quota: %w", result.Error)
+				return fmt.Errorf("consume instant quota: %w", result.Error)
 			}
 			if result.RowsAffected == 0 {
-				return errors.New("quota reservation not found or quota exceeded")
+				return ErrQuotaExceeded
 			}
 		}
 
-		if err := tx.Create(file).Error; err != nil {
-			return fmt.Errorf("create file metadata: %w", err)
+		record := newInstantFile(ownerID, in, obj)
+		if err := tx.Create(record).Error; err != nil {
+			return fmt.Errorf("save instant file: %w", err)
 		}
+		created = record
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return created, nil
+}
+
+// DedupCreate runs the direct-upload dedup transaction (B4, spec §1.3/§4).
+// The service copied tmp→blobs/<sha> BEFORE calling this, so the moment the
+// objects row becomes visible the bytes already exist there — no half-blob
+// window for concurrent instant probes (report §"COPY BEFORE THE TX").
+//
+//  1. AcquireBlob: created → INSERT the objects row (object_key blobs/<sha>,
+//     coarse content_type clamped inside the primitive, refcount 1); hit →
+//     refcount+1 with the STORED row's values — the first uploader's
+//     content_type/size win, the caller's declaration is ignored there (B1
+//     contract);
+//  2. reservation→usage convert via convertReservationTx — the exact
+//     CreateWithQuota SQL, so direct-upload quota accounting is unchanged;
+//  3. files row through newInstantFile, the same provenance mapper the
+//     instant path uses: ObjectKey/Sha256/Size/ContentType/ETag ALL from the
+//     locked Object, ETag = sha256 (spec §2.1).
+//
+// The "refcount acquired but files insert failed" compensation question is
+// answered structurally: acquire and insert share this one transaction, so a
+// failed insert rolls the refcount move back with it — a committed row count
+// without its file rows cannot exist. Lock order objects→users→files matches
+// InstantCreate, keeping the two dedup paths deadlock-ordered against each
+// other. InnoDB 1213/1205 from the S→X upgrade surface verbatim here; the
+// Service retry loop classifies, this method never retries.
+func (r *GORMRepository) DedupCreate(ctx context.Context, in DedupCreateInput) (*File, error) {
+	if err := validateBlobSha256(in.Sha256); err != nil {
+		return nil, err
+	}
+	if in.Size < 0 || in.ReservedSize < 0 || in.Size > in.ReservedSize {
+		return nil, errors.New("invalid file size or reservation")
+	}
+
+	var created *File
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		obj, _, err := r.AcquireBlob(tx, in.Sha256, in.ContentType, in.Size)
+		if err != nil {
+			return err
+		}
+
+		if in.ReservedSize > 0 {
+			if err := convertReservationTx(tx, in.OwnerID, in.ReservedSize, obj.Size); err != nil {
+				return err
+			}
+		}
+
+		record := newInstantFile(in.OwnerID, InstantInput{
+			Sha256:       in.Sha256,
+			OriginalName: in.OriginalName,
+			ContentType:  in.ContentType,
+			FolderID:     in.FolderID,
+		}, obj)
+		if err := tx.Create(record).Error; err != nil {
+			return fmt.Errorf("save dedup file: %w", err)
+		}
+		created = record
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return created, nil
+}
+
+// ReleaseBlob decrements the objects row for sha256. When refcount hits zero
+// the row is deleted and (objectKey, true) is returned so the caller can hand
+// the key to the delayed physical GC (spec §1.4); otherwise (objectKey, false).
+// A row that is already gone (concurrent release raced to zero, or never
+// existed) is a no-op: ("", false, nil) — releases are idempotent per file row.
+//
+// DEADLOCK CONTRACT (B1 review RF1): the decrement's row lock races the
+// S→X upgrade path inside AcquireBlob (shared duplicate-key lock vs this
+// exclusive update, plus adopt-vs-release interleaving on the same PK).
+// CALLERS MUST treat MySQL 1213 (deadlock) / 1205 (lock-wait timeout) as
+// retryable and re-run the whole surrounding transaction — same contract as
+// AcquireBlob above; the loser rolls back cleanly, nothing corrupts.
+func (r *GORMRepository) ReleaseBlob(tx *gorm.DB, sha256 string) (string, bool, error) {
+	result := tx.Model(&Object{}).Where("sha256 = ?", sha256).
+		UpdateColumn("refcount", gorm.Expr("refcount - 1"))
+	if result.Error != nil {
+		return "", false, fmt.Errorf("release blob: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return "", false, nil
+	}
+
+	var obj Object
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("sha256 = ?", sha256).First(&obj).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read back blob refcount: %w", err)
+	}
+	if obj.Refcount > 0 {
+		return obj.ObjectKey, false, nil
+	}
+
+	if err := tx.Where("sha256 = ?", sha256).Delete(&Object{}).Error; err != nil {
+		return "", false, fmt.Errorf("delete zero-refcount blob: %w", err)
+	}
+	return obj.ObjectKey, true, nil
 }
 
 var _ Repository = (*GORMRepository)(nil)

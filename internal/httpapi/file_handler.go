@@ -3,6 +3,7 @@ package httpapi
 import (
 	"PersonalCloudStorage/internal/file"
 	"PersonalCloudStorage/internal/folder"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +23,17 @@ type moveFileRequest struct {
 
 type renameFileRequest struct {
 	Name string `json:"name" binding:"required"`
+}
+
+// instantFileRequest is the POST /files/instant body (spec §2.3).
+// folder_id is optional (absent/0 = root, like Upload's default "0");
+// sha256/original_name/content_type are required strings — shape errors are
+// 400, the sha hex rule itself is validated (ErrInvalidSha256) in the service.
+type instantFileRequest struct {
+	Sha256       string  `json:"sha256" binding:"required"`
+	OriginalName string  `json:"original_name" binding:"required"`
+	ContentType  string  `json:"content_type" binding:"required"`
+	FolderID     *uint64 `json:"folder_id"`
 }
 
 type storageUsageResponse struct {
@@ -64,15 +76,36 @@ type listFilesResponse struct {
 	Pagination paginationResponse     `json:"pagination"`
 }
 
-type FileHandler struct {
-	service *file.Service
+// FileServiceAPI is the handler's view of *file.Service — the same narrow-
+// interface seam ShareAPI already uses in this package (share_handler.go).
+// Production passes the real *file.Service; tests inject a fake to drive
+// every instant-upload status without a database.
+type FileServiceAPI interface {
+	Upload(ctx context.Context, input file.UploadInput) (*file.File, error)
+	List(ctx context.Context, input file.ListInput) (*file.ListResult, error)
+	Download(ctx context.Context, ownerID uint64, fileID uint64) (*file.DownloadResult, error)
+	Delete(ctx context.Context, ownerID uint64, fileID uint64) error
+	ListTrash(ctx context.Context, input file.ListInput) (*file.ListResult, error)
+	Restore(ctx context.Context, ownerID uint64, fileID uint64) error
+	PermanentDelete(ctx context.Context, ownerID uint64, fileID uint64) error
+	Move(ctx context.Context, input file.MoveInput) error
+	Rename(ctx context.Context, input file.RenameInput) error
+	Search(ctx context.Context, input file.SearchInput) (*file.ListResult, error)
+	StorageUsage(ctx context.Context, ownerID uint64) (*file.StorageUsageResult, error)
+	InstantUpload(ctx context.Context, input file.InstantInput) (*file.File, error)
 }
 
-func NewFileHandler(service *file.Service) *FileHandler {
+type FileHandler struct {
+	service FileServiceAPI
+}
+
+func NewFileHandler(service FileServiceAPI) *FileHandler {
 	return &FileHandler{
 		service: service,
 	}
 }
+
+var _ FileServiceAPI = (*file.Service)(nil)
 
 func requireCurrentUserID(c *gin.Context) (uint64, bool) {
 	userID, ok := CurrentUserID(c)
@@ -149,13 +182,31 @@ func (h *FileHandler) Upload(c *gin.Context) {
 			return
 		}
 
+		if errors.Is(err, file.ErrBlobBusy) {
+			// B4: the dedup transaction lost every InnoDB lock round against
+			// same-sha concurrency. No row committed, tmp cleaned, the upload
+			// is safely retryable — the same 409 face the instant probe uses.
+			c.JSON(http.StatusConflict, gin.H{
+				"error": "blob busy, retry",
+			})
+			return
+		}
+
 		_ = c.Error(err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "upload file failed",
 		})
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{
+	c.JSON(http.StatusCreated, fileSuccessResponse(created))
+}
+
+// fileSuccessResponse is THE success shape for a materialized file row —
+// shared by POST /files and POST /files/instant so the instant 201 is
+// field-for-field identical to the upload 201 by construction (spec §2.3:
+// "与 POST /files 逐字段同形").
+func fileSuccessResponse(created *file.File) gin.H {
+	return gin.H{
 		"id":            created.ID,
 		"folder_id":     created.FolderID,
 		"original_name": created.OriginalName,
@@ -163,7 +214,87 @@ func (h *FileHandler) Upload(c *gin.Context) {
 		"size":          created.Size,
 		"content_type":  created.ContentType,
 		"created_at":    created.CreatedAt,
+	}
+}
+
+// InstantUpload answers POST /files/instant (秒传 probe, spec §1.3/§2.3):
+// a blob hit links a files row for the caller without byte transfer (201,
+// identical shape to POST /files); a cold sha is NOT an error — it answers
+// 200 {"exists": false} with a deliberately disjoint shape (the client then
+// falls back to the real upload). Error faces: 400 bad shape/sha/name,
+// 404 folder (foreign and missing share one face), 507 quota (Upload's
+// body), 409 blob busy (bounded InnoDB lock retries exhausted, client may
+// re-probe), 500 anything else.
+func (h *FileHandler) InstantUpload(c *gin.Context) {
+	ownerID, ok := requireCurrentUserID(c)
+	if !ok {
+		return
+	}
+
+	var request instantFileRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid instant upload request",
+		})
+		return
+	}
+
+	folderID := uint64(0)
+	if request.FolderID != nil {
+		folderID = *request.FolderID
+	}
+
+	created, err := h.service.InstantUpload(c.Request.Context(), file.InstantInput{
+		OwnerID:      ownerID,
+		Sha256:       request.Sha256,
+		OriginalName: request.OriginalName,
+		ContentType:  request.ContentType,
+		FolderID:     folderID,
 	})
+	if err != nil {
+		switch {
+		case errors.Is(err, file.ErrBlobNotFound):
+			// The one success-shaped miss: client uploads normally.
+			c.JSON(http.StatusOK, gin.H{
+				"exists": false,
+			})
+
+		case errors.Is(err, file.ErrInvalidSha256):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "invalid sha256",
+			})
+
+		case errors.Is(err, file.ErrInvalidFileName):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "invalid file name",
+			})
+
+		case errors.Is(err, folder.ErrFolderNotFound):
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "folder not found",
+			})
+
+		case errors.Is(err, file.ErrQuotaExceeded):
+			// Same 507 body as the direct Upload.
+			c.JSON(http.StatusInsufficientStorage, gin.H{
+				"error": "storage quota exceeded",
+			})
+
+		case errors.Is(err, file.ErrBlobBusy):
+			c.JSON(http.StatusConflict, gin.H{
+				"error": "blob busy, retry",
+			})
+
+		default:
+			_ = c.Error(err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "instant upload failed",
+			})
+		}
+		return
+	}
+
+	c.JSON(http.StatusCreated, fileSuccessResponse(created))
 }
 
 func (h *FileHandler) List(c *gin.Context) {
@@ -423,6 +554,17 @@ func (h *FileHandler) PermanentDelete(c *gin.Context) {
 		if errors.Is(err, file.ErrFileNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": "file not found in trash",
+			})
+			return
+		}
+		if errors.Is(err, file.ErrBlobBusy) {
+			// B5: the dedup delete tx (objects-first, then the legacy
+			// files→users tail) lost every InnoDB lock round against a
+			// concurrent same-sha acquire. Nothing was
+			// committed — refcount and rows are untouched — so the client may
+			// simply retry. Same 409 face as Upload/InstantUpload.
+			c.JSON(http.StatusConflict, gin.H{
+				"error": "blob busy, retry",
 			})
 			return
 		}

@@ -1,11 +1,13 @@
 // 底部 dock（spec §5.2 用户决定：macOS 风 glass-dock，放弃侧栏）。
-// 条目分组：全部文件/回收站/搜索 | 上传/新建 | 用户（主题切换 + 退出登录）。
+// 条目分组：全部文件/回收站/我的分享/搜索 | 上传/新建 | 用户（主题切换 + 退出登录）。
+// W2：「我的分享」进第一组导航段（design §1.1 图标 Share2 裁定）；GlassDockItem API 无激活态位
+// （vendored 编译件仅 icon+label+onClick），与既有条目同形——当前路由高亮顺延 registry swap 窗口。
 // 结构偏离说明：vendored GlassDock（PATH B 编译件）items API 只支持 icon+onClick 的裸 button，
 // 无法内嵌 DropdownMenu；故「用户」做 dock 同栏相邻控件（同一玻璃条内、分隔线隔开），
 // 视觉分组不变。TODO(Task 13 swap)：registry 源码恢复后评估把用户项收回 dock 内部。
 // DockActions 由 AppLayout 注入（Task 8 实装 onUpload；Task 9 实装 onNewFolder=新建目录 modal；
 // T13b 修复轮 1 实装 onSearch=聚焦 TopBar 搜索输入框，见下方「注入点现状」；命令面板 UI 仍顺延·待换源，验收清单 C2.6）。
-import { Command, FolderPlus, Home, LogOut, SunMoon, Trash2, Upload } from 'lucide-react'
+import { Command, FolderPlus, Home, LogOut, Share2, SunMoon, Trash2, Upload } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { GlassDock, type GlassDockItem } from '@/components/glinui/components/glass-dock'
 import { Avatar } from '@/components/glinui/components/avatar'
@@ -40,6 +42,7 @@ export function Dock({ actions = noopDockActions }: { actions?: DockActions }) {
   const items: GlassDockItem[] = [
     { id: 'files', icon: <Home size={22} />, label: '全部文件', onClick: () => navigate('/files') },
     { id: 'trash', icon: <Trash2 size={22} />, label: '回收站', onClick: () => navigate('/trash') },
+    { id: 'shares', icon: <Share2 size={22} />, label: '我的分享', onClick: () => navigate('/shares') },
     { id: 'search', icon: <Command size={22} />, label: '搜索', onClick: actions.onSearch },
     { id: 'upload', icon: <Upload size={22} />, label: '上传', onClick: actions.onUpload },
     { id: 'new-folder', icon: <FolderPlus size={22} />, label: '新建文件夹', onClick: actions.onNewFolder },

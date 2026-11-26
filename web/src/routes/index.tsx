@@ -8,6 +8,8 @@ import { AppLayout } from './AppLayout'
 import { canAccess, type RouteGuardMeta } from './guard'
 import { FilesRoute } from './FilesRoute'
 import { LoginRoute } from './LoginRoute'
+import { SharesRoute } from './SharesRoute'
+import { ShareRoute } from './ShareRoute'
 import { TrashRoute } from './TrashRoute'
 
 // 用闭包携带 meta 而非 v7 的 to.meta：v8 middleware args 不含 handle/meta，
@@ -27,6 +29,12 @@ export const routeObjects: RouteObject[] = [
     middleware: [authGuard({ guestOnly: true })],
   },
   {
+    // 访客下载页（Task A7，spec §1.2）：公开路由免登录直达，顶层挂载不进 AppLayout。
+    path: '/d/:token',
+    element: <ShareRoute />,
+    middleware: [authGuard({ public: true })],
+  },
+  {
     path: '/',
     element: <AppLayout />,
     children: [
@@ -39,6 +47,11 @@ export const routeObjects: RouteObject[] = [
       {
         path: 'trash',
         element: <TrashRoute />, // Task 11 兑现占位（trash-route 锚点移入 TrashRoute 内部保留）
+        middleware: [authGuard({ requiresAuth: true })],
+      },
+      {
+        path: 'shares',
+        element: <SharesRoute />, // Task W2「我的分享」管理页（Dock 导航入口同源）
         middleware: [authGuard({ requiresAuth: true })],
       },
       { path: '*', loader: () => redirect('/files') },

@@ -6,7 +6,7 @@
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
-import { Toaster } from 'sonner'
+import { toast, Toaster } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Attachment } from '@/components/app/Attachment'
 import { UploadQueuePanel } from '@/components/app/UploadQueuePanel'
@@ -24,10 +24,33 @@ interface Posted {
 let posts: Posted[] = []
 let autoRespond: Response | null = null // 非 null 时新 POST 直接以该响应收敛（不再悬挂）
 
+// W3：/api/v1/files/instant 探针路由——默认逐请求消费 instantResponses 队列，缺省回 200 miss
+// （既有直传用例因此行为不变：探针静默未命中 → 原样直传）。'gate' 哨兵则悬挂待手动 resolve，
+// 供「探针期间取消」「命中前观察 queued 态」用例钉时序。
+type InstantReply = Response | 'gate'
+let instantResponses: InstantReply[] = []
+let instantRequests: Array<{ body: Record<string, unknown>; resolve: (r: Response) => void }> = []
+
+/** W3：jsdom 无 crypto.subtle（spec §6）——lib/crypto.ts 真 adapter 不进单测，队列层接线用例注入假 subtle。 */
+function stubSubtle(): void {
+  vi.stubGlobal('crypto', {
+    getRandomValues: <T extends ArrayBufferView>(arr: T): T => arr,
+    subtle: { digest: async (_alg: string, _data: ArrayBuffer) => new Uint8Array(32).buffer },
+  })
+}
+
 beforeEach(() => {
   posts = []
   autoRespond = null
+  instantResponses = []
+  instantRequests = []
   resetUploadManager()
+  // sonner 的 toast store 是模块级队列，默认 4s 自毁定时器跨用例存活——
+  // W3 新增「已上传 N 个文件。」相邻用例会被上一例残留 toast 串扰（queryByText 命中多个）。
+  toast.dismiss()
+  // MINOR-2：无 stubSubtle 的用例走真 sha256Hex → jsdom 无 subtle → 编排层 DEV 降级留痕 console.debug，
+  // 全局静音保 pristine（afterEach 的 unstub/restore 复原）。
+  vi.spyOn(console, 'debug').mockImplementation(() => {})
   vi.stubGlobal(
     'fetch',
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -39,6 +62,16 @@ beforeEach(() => {
           posts.push({ name: file.name, resolve }) // 入桩数组顺序即开播顺序（串行断言的观测面）
         })
       }
+      if (url === '/api/v1/files/instant' && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>
+        const next = instantResponses.shift() ?? jsonResponse(200, { exists: false })
+        if (next === 'gate') {
+          return new Promise<Response>((resolve) => {
+            instantRequests.push({ body, resolve })
+          })
+        }
+        return Promise.resolve(next)
+      }
       return Promise.reject(new Error(`unexpected fetch: ${url}`))
     }),
   )
@@ -47,6 +80,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
   resetUploadManager()
 })
 
@@ -241,6 +275,120 @@ describe('useUploadManager：串行队列与缓存失效', () => {
   })
 })
 
+describe('W3 秒传探针：队列层接线（真 adapter 注入假 subtle/fake fetch）', () => {
+  const hit201 = (id: number) =>
+    jsonResponse(201, {
+      id,
+      folder_id: 3,
+      original_name: 'dup.txt',
+      object_key: 'blobs/000000',
+      size: 7,
+      content_type: 'text/plain',
+      created_at: '2026-11-26T00:00:00Z',
+    })
+
+  it('命中(201) → 零字节：files POST 绝不发生；探针期间行 queued 0%（无新状态）；done 后双失效恰一次', async () => {
+    renderHarness(true)
+    stubSubtle()
+    await waitFor(() => expect(view).not.toBeNull())
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+    instantResponses = ['gate']
+
+    act(() => {
+      view!.submitFiles([fileNamed('dup.txt')], 3)
+    })
+    await waitFor(() => expect(instantRequests).toHaveLength(1))
+    // 探针入参=后端 instantFileRequest 形状；假 subtle → 64 位小写 hex
+    expect(instantRequests[0]!.body).toEqual({
+      sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+      original_name: 'dup.txt',
+      content_type: 'text/plain',
+      folder_id: 3,
+    })
+    // 哈希/探针期间：任务保持 queued 0%，busy 不计（builder-check 裁定：不新增状态）
+    expect(view!.tasks[0]).toMatchObject({ status: 'queued', percent: 0 })
+    expect(view!.busy).toBe(false)
+
+    act(() => {
+      instantRequests[0]!.resolve(hit201(77))
+    })
+    await waitFor(() => expect(view!.tasks[0]?.status).toBe('done'))
+    expect(view!.tasks[0]?.instant).toBe(true)
+    expect(posts).toHaveLength(0) // 零字节：直传请求从未发出
+    expect(invalidateSpy).toHaveBeenCalledTimes(2) // done 仅一次 → ['files']+['usage'] 各一
+    expect(await screen.findByText('已上传 1 个文件。')).toBeInTheDocument() // 批尾 toast 权威
+    // 队列行内「⚡秒传」徽标（不另弹秒传 toast）
+    expect(screen.getByTestId('instant-badge')).toHaveTextContent('⚡秒传')
+    expect(screen.queryByText('秒传成功')).toBeNull()
+  })
+
+  it('探针期间取消 → cancelled + 新文案「上传已取消。」（W3 有意变更钉测）；迟到 201 不再动行、零直传', async () => {
+    renderHarness(true)
+    stubSubtle()
+    await waitFor(() => expect(view).not.toBeNull())
+    instantResponses = ['gate']
+
+    act(() => {
+      view!.submitFiles([fileNamed('dup.txt')], 0)
+    })
+    await waitFor(() => expect(instantRequests).toHaveLength(1))
+    // 探针期间任务仍是 queued → 面板 queued 行的取消按钮即探针期取消入口
+    expect(view!.tasks[0]?.status).toBe('queued')
+    act(() => {
+      screen.getByRole('button', { name: '取消' }).click()
+    })
+    await waitFor(() => expect(view!.tasks[0]?.status).toBe('cancelled'))
+    expect(await screen.findByText('上传已取消。')).toBeInTheDocument()
+
+    act(() => {
+      instantRequests[0]!.resolve(hit201(77)) // 迟到的命中结果必须被丢弃
+    })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(view!.tasks[0]?.status).toBe('cancelled') // 不再转 done
+    expect(posts).toHaveLength(0)
+    expect(screen.queryByText('已上传 1 个文件。')).toBeNull() // halted：批尾 toast 不出
+  })
+
+  it('批内混合（hit+miss）：批尾 toast 仍权威且仅一条「已上传 2 个文件。」；徽标只挂命中行', async () => {
+    renderHarness(true)
+    stubSubtle()
+    await waitFor(() => expect(view).not.toBeNull())
+    instantResponses = [hit201(88)] // 第一探针命中；第二回退默认 miss
+
+    act(() => {
+      view!.submitFiles([fileNamed('dup.txt'), fileNamed('fresh.txt')], 3)
+    })
+    await waitForPosts(1) // dup 命中零字节 → fresh 未命中 → 正常直传开播
+    expect(instantRequests).toHaveLength(0) // 无 gate：两次探针都已自动应答
+    act(() => {
+      posts[0]!.resolve(jsonResponse(200, { id: 89 }))
+    })
+    await waitFor(() => {
+      expect(view!.tasks.map((t) => t.status)).toEqual(['done', 'done'])
+    })
+    expect(screen.getAllByTestId('instant-badge')).toHaveLength(1) // 仅命中行有徽标
+    expect(await screen.findByText('已上传 2 个文件。')).toBeInTheDocument()
+    expect(screen.getAllByText('已上传 2 个文件。')).toHaveLength(1) // 无第二条秒传 toast
+  })
+
+  it('未命中(200 exists:false) → 直传与旧行为逐字段一致，无徽标', async () => {
+    renderHarness(true)
+    stubSubtle()
+    await waitFor(() => expect(view).not.toBeNull())
+    act(() => {
+      view!.submitFiles([fileNamed('a.txt')], 0)
+    })
+    await waitForPosts(1)
+    act(() => {
+      posts[0]!.resolve(jsonResponse(200, { id: 9 }))
+    })
+    await waitFor(() => expect(view!.tasks[0]?.status).toBe('done'))
+    expect(view!.tasks[0]?.instant).toBeUndefined()
+    expect(screen.queryByTestId('instant-badge')).toBeNull()
+    expect(await screen.findByText('已上传 1 个文件。')).toBeInTheDocument()
+  })
+})
+
 describe('Attachment 行：状态文案与操作可用性', () => {
   const base = { id: 'r1', name: 'big.bin', size: 49 * 1024 * 1024, percent: 57 }
 
@@ -278,6 +426,20 @@ describe('Attachment 行：状态文案与操作可用性', () => {
     expect(screen.getByText(/上传失败：云仓可用存储空间不足。/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '重试' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '取消' })).toBeNull()
+  })
+
+  it('W3 徽标：instant 行内显「⚡秒传」，普通 done 行不显（命中差异以徽标呈现，非 toast）', () => {
+    const { unmount } = render(
+      <Attachment
+        task={{ id: 'r11', name: 'dup.txt', size: 1024, percent: 100, status: 'done', instant: true }}
+        onCancel={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    )
+    expect(screen.getByTestId('instant-badge')).toHaveTextContent('⚡秒传')
+    unmount()
+    render(<Attachment task={{ id: 'r12', name: 'norm.txt', size: 1024, percent: 100, status: 'done' }} onCancel={vi.fn()} onRetry={vi.fn()} />)
+    expect(screen.queryByTestId('instant-badge')).toBeNull()
   })
 
   it('重试/取消回调接线到按钮', async () => {
