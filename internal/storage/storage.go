@@ -20,6 +20,12 @@ type ObjectStorage interface {
 	Stat(ctx context.Context, key string) (ObjectInfo, error)
 	Delete(ctx context.Context, key string) error
 
+	// List enumerates every object whose key starts with prefix (recursive),
+	// returning at least Key/Size/LastModified per entry — cmd/blob-gc's input
+	// (B5, spec §1.4). Same interface-extension precedent as Copy from B2:
+	// every ObjectStorage implementation grows the method repo-wide.
+	List(ctx context.Context, prefix string) ([]ObjectInfo, error)
+
 	// Copy performs a server-side copy of srcKey to dstKey inside the same
 	// bucket — no object bytes ever round-trip through this client. Dedup
 	// uses it to promote a tmp upload key to the content-addressed

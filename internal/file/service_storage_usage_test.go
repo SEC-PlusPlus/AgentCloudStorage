@@ -86,8 +86,8 @@ func (*usageRepositoryStub) ReleaseQuota(context.Context, uint64, int64) error {
 	return errors.New("unexpected ReleaseQuota call")
 }
 
-func (*usageRepositoryStub) CreateWithQuota(context.Context, *File, int64) error {
-	return errors.New("unexpected CreateWithQuota call")
+func (*usageRepositoryStub) HardDeleteWithBlobRelease(context.Context, uint64, uint64, string, ...func(*gorm.DB) error) error {
+	return errors.New("unexpected HardDeleteWithBlobRelease call")
 }
 
 func (*usageRepositoryStub) FindBlob(context.Context, string) (*Object, error) {

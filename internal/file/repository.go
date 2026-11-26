@@ -14,10 +14,21 @@ type Repository interface {
 	Restore(ctx context.Context, ownerID uint64, fileID uint64) error
 	GetDeletedByID(ctx context.Context, ownerID uint64, fileID uint64) (*File, error)
 	// HardDeleteWithQuota removes the row and its quota atomically. extra
-	// hooks (share purge today, blob release later) run INSIDE that same
-	// transaction after the row delete succeeded; a hook error aborts the
-	// whole delete.
+	// hooks (share purge) run INSIDE that same transaction after the row
+	// delete succeeded; a hook error aborts the whole delete. Legacy rows
+	// only (files.sha256 IS NULL): the object lives solely at this row's
+	// object_key, so the service deletes the object BEFORE calling this.
 	HardDeleteWithQuota(ctx context.Context, ownerID uint64, fileID uint64, extra ...func(tx *gorm.DB) error) error
+
+	// HardDeleteWithBlobRelease is the B5 dedup-row twin (spec §1.3/§1.4):
+	// ONE transaction that releases the blob reference FIRST (objects row,
+	// matching the objects→users→files lock order of InstantCreate/DedupCreate
+	// — B3-M4), then does HardDeleteWithQuota's exact guarded quota+row work,
+	// then the extra hooks. It NEVER touches the storage layer: a zeroed
+	// refcount deletes only the objects row; the physical blob waits for
+	// cmd/blob-gc's safety window. InnoDB 1213/1205 surface verbatim for the
+	// Service retry loop to classify.
+	HardDeleteWithBlobRelease(ctx context.Context, ownerID uint64, fileID uint64, sha256 string, extra ...func(tx *gorm.DB) error) error
 	ListByFolderAndStatus(ctx context.Context, ownerID uint64, folderID uint64, status Status, limit int, offset int) ([]File, int64, error)
 	Move(ctx context.Context, ownerID uint64, fileID uint64, targetFolderID uint64) error
 	Rename(ctx context.Context, ownerID uint64, fileID uint64, newName string) error
@@ -27,7 +38,6 @@ type Repository interface {
 	QuotaBytes(ctx context.Context, ownerID uint64) (int64, error)
 	ReserveQuota(ctx context.Context, ownerID uint64, size int64) error
 	ReleaseQuota(ctx context.Context, ownerID uint64, size int64) error
-	CreateWithQuota(ctx context.Context, file *File, reservedSize int64) error
 
 	// Blob primitives (instant-upload dedup, spec §5). AcquireBlob and
 	// ReleaseBlob are transaction-scoped: they take the caller's *gorm.DB so

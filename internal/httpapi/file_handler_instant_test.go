@@ -39,6 +39,10 @@ type fakeFileService struct {
 	// move behaviour (coexistence leg)
 	moveErr   error
 	moveCalls int
+
+	// permanent-delete behaviour (B5 error faces)
+	permanentDeleteErr   error
+	permanentDeleteCalls int
 }
 
 var _ FileServiceAPI = (*fakeFileService)(nil)
@@ -87,6 +91,10 @@ func (f *fakeFileService) Restore(context.Context, uint64, uint64) error {
 }
 
 func (f *fakeFileService) PermanentDelete(context.Context, uint64, uint64) error {
+	f.permanentDeleteCalls++
+	if f.permanentDeleteErr != nil {
+		return f.permanentDeleteErr
+	}
 	return errors.New("unexpected PermanentDelete call")
 }
 

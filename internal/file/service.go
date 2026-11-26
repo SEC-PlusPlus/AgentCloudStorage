@@ -523,6 +523,17 @@ func (s *Service) Restore(ctx context.Context, ownerID uint64, fileID uint64) er
 	return nil
 }
 
+// PermanentDelete forks on files.sha256 (spec §1.3 delete row, §1.4 delayed
+// GC). THE RED LINE: a dedup row's object_key may be SHARED — any
+// storage.Delete on it destroys other users' data — so the dedup branch is
+// pure logic: ONE objects→users→files transaction (ReleaseBlob first inside
+// HardDeleteWithBlobRelease) and ZERO MinIO calls in or after the tx. A
+// refcount that hits zero only deletes the objects row; the physical blob is
+// reclaimed later by cmd/blob-gc under the safety window, which is precisely
+// what closes the §1.4 late-Delete-vs-rebuild race a synchronous delete would
+// reintroduce. Legacy rows (sha NULL) keep the pre-B5 sequence verbatim:
+// object delete first, then the row/quota transaction — no dedup bookkeeping
+// exists for them and their object_key is exclusively theirs.
 func (s *Service) PermanentDelete(ctx context.Context, ownerID uint64, fileID uint64) error {
 	if ownerID == 0 {
 		return errors.New("owner id is required")
@@ -538,19 +549,52 @@ func (s *Service) PermanentDelete(ctx context.Context, ownerID uint64, fileID ui
 	deleteCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 
-	if err := s.storage.Delete(deleteCtx, record.ObjectKey); err != nil {
-		return fmt.Errorf("delete object from storage: %w", err)
-	}
-
 	// spec §5.4 cascade: share links die with their object, purged inside the
-	// same transaction as the row/quota delete. extra is a slice so the
-	// B-track blob-release hook can join it later without reshaping callers.
+	// same transaction as the row/quota delete — the extra slice is shared by
+	// both branches, hooks running after the row delete in either.
 	var extra []func(tx *gorm.DB) error
 	if s.sharePurger != nil {
 		purger := s.sharePurger
 		extra = append(extra, func(tx *gorm.DB) error {
 			return purger.PurgeByFileTx(tx, fileID)
 		})
+	}
+
+	if record.Sha256 != nil {
+		// Dedup branch. B3-M4 lock-order alignment: the blob release acquires
+		// the objects row BEFORE users/files inside the tx, matching the
+		// instant/upload acquire paths. The same bounded retry wraps it
+		// (contract 1) so a delete-vs-instant 1213/1205 loss self-heals;
+		// exhaustion answers ErrBlobBusy (handler: 409, retry-friendly).
+		sha := *record.Sha256
+		var lastErr error
+		for attempt := 1; attempt <= blobTxMaxAttempts; attempt++ {
+			if attempt > 1 {
+				timer := time.NewTimer(time.Duration(attempt-1) * blobTxRetryPause)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return ctx.Err()
+				case <-timer.C:
+				}
+			}
+			err := s.repo.HardDeleteWithBlobRelease(deleteCtx, ownerID, fileID, sha, extra...)
+			if err == nil {
+				return nil
+			}
+			if !isBlobLockContention(err) {
+				// Deterministic outcomes (row gone, real db errors) surface
+				// with their Is-able wrapping, same face as the legacy branch.
+				return fmt.Errorf("delete file metadata: %w", err)
+			}
+			lastErr = err
+		}
+		return fmt.Errorf("permanent delete: %w (last: %w)", ErrBlobBusy, lastErr)
+	}
+
+	// Legacy branch — unchanged behavior (object first, then row tx).
+	if err := s.storage.Delete(deleteCtx, record.ObjectKey); err != nil {
+		return fmt.Errorf("delete object from storage: %w", err)
 	}
 
 	if err := s.repo.HardDeleteWithQuota(deleteCtx, ownerID, fileID, extra...); err != nil {

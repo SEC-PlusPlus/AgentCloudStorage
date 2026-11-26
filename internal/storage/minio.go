@@ -102,6 +102,28 @@ func (s *MinIOStorage) Delete(ctx context.Context, key string) error {
 	return s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{})
 }
 
+// List walks every object under prefix recursively (B5, cmd/blob-gc). Errors
+// return raw like the other verbs — ToErrorResponse-friendly. LastModified is
+// the GC age authority; multipart/dedup keys alike surface uniformly.
+func (s *MinIOStorage) List(ctx context.Context, prefix string) ([]ObjectInfo, error) {
+	var out []ObjectInfo
+	for item := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{
+		Prefix:    prefix,
+		Recursive: true,
+	}) {
+		if item.Err != nil {
+			return nil, item.Err
+		}
+		out = append(out, ObjectInfo{
+			Key:          item.Key,
+			Size:         item.Size,
+			ETag:         item.ETag,
+			LastModified: item.LastModified,
+		})
+	}
+	return out, nil
+}
+
 // Copy 走 MinIO 服务端复制（x-amz-copy-source），字节不经过本客户端。
 // 错误原样返回（同 Put/Get/Stat/Delete）：本文件判定错误的惯例是
 // minio.ToErrorResponse(err)，它是裸类型断言、不解包 %w——一旦 wrap，

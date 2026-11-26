@@ -24,6 +24,18 @@ type cascadeRepositoryStub struct {
 	extraLens       []int
 	hardDeleteErr   error
 
+	// B5 dedup-delete fork knobs. HardDeleteWithBlobRelease mirrors
+	// HardDeleteWithQuota's hook execution (nil tx, extra after the "row
+	// delete"), plus strict per-attempt error semantics like instantCreateErrs:
+	// errors[i] = attempt i+1's failure; attempt len+1 succeeds. onHardDelete
+	// lets the legacy-path test observe whether the object delete already
+	// happened when the row transaction runs.
+	dedupHardDeleteCalls int
+	dedupHardDeleteErrs  []error
+	lastDedupSha         string
+	dedupExtraLens       []int
+	onHardDelete         func()
+
 	// Instant-upload knobs (B3): FindBlob answers findBlobObj when set, else
 	// the default miss sentinel stays live so every pre-B3 cascade test keeps
 	// compiling and passing unchanged. instantCreateErrs has STRICT length
@@ -86,8 +98,37 @@ func (r *cascadeRepositoryStub) HardDeleteWithQuota(
 ) error {
 	r.hardDeleteCalls++
 	r.extraLens = append(r.extraLens, len(extra))
+	if r.onHardDelete != nil {
+		r.onHardDelete()
+	}
 	if r.hardDeleteErr != nil {
 		return r.hardDeleteErr
+	}
+	for _, hook := range extra {
+		if err := hook(nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// HardDeleteWithBlobRelease is the B5 dedup-path twin of HardDeleteWithQuota:
+// the stub runs it with the blob release already folded into the (imaginary)
+// transaction and only executes the extra hooks.
+func (r *cascadeRepositoryStub) HardDeleteWithBlobRelease(
+	_ context.Context,
+	_ uint64,
+	_ uint64,
+	sha256 string,
+	extra ...func(tx *gorm.DB) error,
+) error {
+	r.dedupHardDeleteCalls++
+	r.lastDedupSha = sha256
+	r.dedupExtraLens = append(r.dedupExtraLens, len(extra))
+	if r.dedupHardDeleteCalls <= len(r.dedupHardDeleteErrs) {
+		if err := r.dedupHardDeleteErrs[r.dedupHardDeleteCalls-1]; err != nil {
+			return err
+		}
 	}
 	for _, hook := range extra {
 		if err := hook(nil); err != nil {
@@ -131,10 +172,6 @@ func (r *cascadeRepositoryStub) ReserveQuota(context.Context, uint64, int64) err
 
 func (r *cascadeRepositoryStub) ReleaseQuota(context.Context, uint64, int64) error {
 	return errors.New("unexpected ReleaseQuota call")
-}
-
-func (r *cascadeRepositoryStub) CreateWithQuota(context.Context, *File, int64) error {
-	return errors.New("unexpected CreateWithQuota call")
 }
 
 func (r *cascadeRepositoryStub) FindBlob(_ context.Context, _ string) (*Object, error) {
@@ -226,6 +263,12 @@ func (s *cascadeStorageStub) Copy(_ context.Context, srcKey, dstKey string) erro
 	}
 	s.content[dstKey] = body
 	return nil
+}
+
+// List completes the ObjectStorage interface (B5, cmd/blob-gc). The cascade
+// tests never enumerate, so it fails loudly like Put/Stat.
+func (s *cascadeStorageStub) List(context.Context, string) ([]storage.ObjectInfo, error) {
+	return nil, errors.New("unexpected List call")
 }
 
 // recordingPurger captures the fileIDs handed to the share cascade hook.

@@ -557,6 +557,16 @@ func (h *FileHandler) PermanentDelete(c *gin.Context) {
 			})
 			return
 		}
+		if errors.Is(err, file.ErrBlobBusy) {
+			// B5: the dedup delete tx (objects→users→files) lost every InnoDB
+			// lock round against a concurrent same-sha acquire. Nothing was
+			// committed — refcount and rows are untouched — so the client may
+			// simply retry. Same 409 face as Upload/InstantUpload.
+			c.JSON(http.StatusConflict, gin.H{
+				"error": "blob busy, retry",
+			})
+			return
+		}
 		_ = c.Error(err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "permanetly delete file failed",

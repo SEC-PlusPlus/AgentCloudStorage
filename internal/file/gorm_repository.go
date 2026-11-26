@@ -111,49 +111,92 @@ func (r *GORMRepository) HardDeleteWithQuota(
 	extra ...func(tx *gorm.DB) error,
 ) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var record File
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("id = ? AND owner_id = ? AND status = ?",
-				fileID, ownerID, StatusDeleted).
-			First(&record).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrFileNotFound
-		}
-		if err != nil {
-			return fmt.Errorf("get file for permanent deletion: %w", err)
-		}
+		return r.hardDeleteTx(tx, ownerID, fileID, extra...)
+	})
+}
 
-		if record.Size > 0 {
-			result := tx.Table("users").
-				Where("id = ? AND used_bytes >= ?", ownerID, record.Size).
-				UpdateColumn("used_bytes", gorm.Expr("used_bytes - ?", record.Size))
-			if result.Error != nil {
-				return fmt.Errorf("decrease used quota: %w", result.Error)
-			}
-			if result.RowsAffected == 0 {
-				return errors.New("used quota is inconsistent with file size")
-			}
+// HardDeleteWithBlobRelease (B5, spec §1.3/§1.4) is the dedup-row delete:
+// ReleaseBlob runs FIRST inside the transaction, so the tx acquires
+// objects→users→files — the exact lock order of InstantCreate/DedupCreate
+// (B3-M4). A delete racing an instant upload on one sha then serialises on
+// the blob row instead of deadlocking across layers; whatever 1213/1205
+// remains is retried by the Service loop like the acquire paths.
+//
+// The zero-refcount outcome is (row deleted, blob untouched) — this method
+// cannot reach MinIO and none of its callers do for sha!=nil rows: physical
+// reclamation is cmd/blob-gc's exclusive job (the §1.4 delayed-GC ruling
+// forbids a late storage.Delete from killing a just-rebuilt same-sha object).
+func (r *GORMRepository) HardDeleteWithBlobRelease(
+	ctx context.Context,
+	ownerID uint64,
+	fileID uint64,
+	sha256 string,
+	extra ...func(tx *gorm.DB) error,
+) error {
+	if err := validateBlobSha256(sha256); err != nil {
+		return err
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if _, _, err := r.ReleaseBlob(tx, sha256); err != nil {
+			return err
 		}
+		return r.hardDeleteTx(tx, ownerID, fileID, extra...)
+	})
+}
 
-		result := tx.Where("id = ? AND owner_id = ? AND status = ?",
+// hardDeleteTx is the shared row/quota half of both permanent-delete paths:
+// lock the deleted-status row, guarded users decrement, row delete, extra
+// hooks after the row is provably gone (spec §5.4). Splitting it keeps
+// HardDeleteWithQuota's legacy SQL byte-for-byte while the dedup twin prepends
+// the blob release.
+func (r *GORMRepository) hardDeleteTx(
+	tx *gorm.DB,
+	ownerID uint64,
+	fileID uint64,
+	extra ...func(tx *gorm.DB) error,
+) error {
+	var record File
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND owner_id = ? AND status = ?",
 			fileID, ownerID, StatusDeleted).
-			Delete(&File{})
+		First(&record).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrFileNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("get file for permanent deletion: %w", err)
+	}
+
+	if record.Size > 0 {
+		result := tx.Table("users").
+			Where("id = ? AND used_bytes >= ?", ownerID, record.Size).
+			UpdateColumn("used_bytes", gorm.Expr("used_bytes - ?", record.Size))
 		if result.Error != nil {
-			return fmt.Errorf("hard delete file: %w", result.Error)
+			return fmt.Errorf("decrease used quota: %w", result.Error)
 		}
 		if result.RowsAffected == 0 {
-			return ErrFileNotFound
+			return errors.New("used quota is inconsistent with file size")
 		}
+	}
 
-		// Hooks only run once the file row is provably gone, still in-tx:
-		// a failing hook rolls the whole permanent delete back (spec §5.4).
-		for _, hook := range extra {
-			if err := hook(tx); err != nil {
-				return err
-			}
+	result := tx.Where("id = ? AND owner_id = ? AND status = ?",
+		fileID, ownerID, StatusDeleted).
+		Delete(&File{})
+	if result.Error != nil {
+		return fmt.Errorf("hard delete file: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return ErrFileNotFound
+	}
+
+	// Hooks only run once the file row is provably gone, still in-tx:
+	// a failing hook rolls the whole permanent delete back (spec §5.4).
+	for _, hook := range extra {
+		if err := hook(tx); err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 func (r *GORMRepository) ListByFolderAndStatus(ctx context.Context, ownerID uint64, folderID uint64, status Status, limit int, offset int) ([]File, int64, error) {
@@ -327,11 +370,16 @@ func (r *GORMRepository) ReleaseQuota(ctx context.Context, ownerID uint64, size 
 	return nil
 }
 
-// convertReservationTx is CreateWithQuota's guarded reservation→usage update
-// lifted verbatim (B4): subtract the reservation, add the real usage, refuse
-// when the user row no longer satisfies quota. Shared with DedupCreate so the
-// direct-upload quota semantics are bit-identical before and after the dedup
-// rework.
+// convertReservationTx is the guarded reservation→usage update, lifted
+// verbatim from the pre-B4 CreateWithQuota (B4) and shared with DedupCreate so
+// the direct-upload quota semantics are bit-identical before and after the
+// dedup rework. (CreateWithQuota itself left the Repository in B5 — zero
+// production callers remained once Upload moved to DedupCreate.)
+//
+// B3-M3 / B5 contract 4: a 0-rows outcome is a QUOTA verdict, not a mystery —
+// either the reservation vanished or concurrent use pushed the user over
+// quota — so it answers ErrQuotaExceeded and the handler keeps its 507 face
+// for both the instant and the direct-upload path (same code path rule).
 func convertReservationTx(tx *gorm.DB, ownerID uint64, reservedSize, fileSize int64) error {
 	result := tx.Table("users").
 		Where(
@@ -348,35 +396,9 @@ func convertReservationTx(tx *gorm.DB, ownerID uint64, reservedSize, fileSize in
 		return fmt.Errorf("convert reserved quota: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return errors.New("quota reservation not found or quota exceeded")
+		return fmt.Errorf("quota reservation not found or quota exceeded: %w", ErrQuotaExceeded)
 	}
 	return nil
-}
-
-func (r *GORMRepository) CreateWithQuota(
-	ctx context.Context,
-	file *File,
-	reservedSize int64,
-) error {
-	if file == nil {
-		return errors.New("file is required")
-	}
-	if reservedSize < 0 || file.Size < 0 || file.Size > reservedSize {
-		return errors.New("invalid file size or reservation")
-	}
-
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if reservedSize > 0 {
-			if err := convertReservationTx(tx, file.OwnerID, reservedSize, file.Size); err != nil {
-				return err
-			}
-		}
-
-		if err := tx.Create(file).Error; err != nil {
-			return fmt.Errorf("create file metadata: %w", err)
-		}
-		return nil
-	})
 }
 
 func (r *GORMRepository) FindBlob(ctx context.Context, sha256 string) (*Object, error) {

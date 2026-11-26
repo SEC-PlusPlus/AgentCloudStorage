@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -95,6 +96,25 @@ func (f *dedupStorageFake) Copy(_ context.Context, srcKey, dstKey string) error 
 	return nil
 }
 
+// List serves the map sorted by key (B5: ObjectStorage grew List for
+// cmd/blob-gc; LastModified is zero — the fake never needed ages, and the
+// pure gcDecision is tested separately in cmd/blob-gc).
+func (f *dedupStorageFake) List(_ context.Context, prefix string) ([]storage.ObjectInfo, error) {
+	keys := make([]string, 0, len(f.objects))
+	for key := range f.objects {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var out []storage.ObjectInfo
+	for _, key := range keys {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		out = append(out, storage.ObjectInfo{Key: key, Size: int64(len(f.objects[key]))})
+	}
+	return out, nil
+}
+
 type dedupRepoFake struct {
 	*cascadeRepositoryStub
 
@@ -136,12 +156,6 @@ func (r *dedupRepoFake) ReleaseQuota(_ context.Context, _ uint64, size int64) er
 	r.releaseCalls = append(r.releaseCalls, size)
 	r.reserved -= size
 	return nil
-}
-
-// CreateWithQuota must be GONE from the direct path after B4 — the quota
-// convert lives inside DedupCreate's tx now. Loud failure keeps that honest.
-func (r *dedupRepoFake) CreateWithQuota(context.Context, *File, int64) error {
-	return errors.New("unexpected CreateWithQuota call after B4")
 }
 
 // DedupCreate mirrors GORMRepository.DedupCreate: AcquireBlob semantics
@@ -438,7 +452,7 @@ func TestUploadEmptyContentDedupsToEmptyBlob(t *testing.T) {
 		t.Fatalf("empty blob refcount = %+v, want 2", repo.blobs[emptySHA])
 	}
 	if repo.used != 0 {
-		t.Errorf("used = %d, want 0 (zero-size conversion skipped, mirrors CreateWithQuota)", repo.used)
+		t.Errorf("used = %d, want 0 (zero-size conversion skipped, mirrors convertReservationTx)", repo.used)
 	}
 	if len(store.deleteKeys) != 2 {
 		t.Errorf("tmp deletes = %v, want both", store.deleteKeys)
