@@ -68,6 +68,29 @@ function bigFile(): File {
   return makeFile(BIG_SIZE)
 }
 
+/**
+ * W3：带真实字节的直传 fake 文件——arrayBuffer() 返回编码字节，供「假 subtle 记录哈希输入=文件原字节」断言；
+ * slice 直接抛错（<49MiB 路径不该触到分片，触到即测试自炸）。
+ */
+function createInstantFile(
+  content: string,
+  options: { size?: number; name?: string; type?: string; lastModified?: number } = {},
+): { file: File; bytes: Uint8Array } {
+  const bytes = new TextEncoder().encode(content)
+  const buffer = bytes.buffer as ArrayBuffer
+  const file = {
+    name: options.name ?? NAME,
+    size: options.size ?? bytes.byteLength,
+    lastModified: options.lastModified ?? LAST_MODIFIED,
+    type: options.type ?? 'application/octet-stream',
+    arrayBuffer: async () => buffer,
+    slice: () => {
+      throw new Error('direct-upload path must not slice')
+    },
+  } as unknown as File
+  return { file, bytes }
+}
+
 interface Harness {
   deps: UploadDeps
   controller: AbortController
@@ -99,6 +122,10 @@ function createHarness(overrides: Partial<UploadDeps> = {}): Harness {
     uploadPart: vi.fn(async () => undefined),
     complete: vi.fn(async () => ({ id: 1 })),
     cancel: vi.fn(async () => undefined),
+    // W3 秒传探针注入点（spec §2 deps 契约）：默认假 subtle/假探针（恒 miss）——
+    // 既有用例直传行为「与旧完全一致」正由 miss 分支原样走直传保证。
+    sha256Hex: vi.fn(async () => 'e'.repeat(64)),
+    instantProbe: vi.fn(async (): Promise<'linked' | 'miss'> => 'miss'),
     storage: {
       read: vi.fn(() => records.slice()),
       save: vi.fn((record: SavedUpload) => {
@@ -479,6 +506,150 @@ describe('runUpload：取消与合并阶段（用例⑥ + 旧 544 行「合并�
     expect(h.deps.startMultipart).toHaveBeenCalledTimes(1)
     expect(h.deps.cancel).toHaveBeenCalledWith('up-1')
     expect(h.tasks.at(-1)!.status).toBe('cancelled')
+  })
+})
+
+describe('runUpload：W3 秒传探针接线（spec §1.2 / builder-check 裁定）', () => {
+  /** 取注入 deps 的 spy 调用记录。 */
+  const callsOf = (fn: unknown): unknown[][] => (fn as ReturnType<typeof vi.fn>).mock.calls
+
+  it('linked → done+instant=true 且 uploadFile(putDirect) 绝不调用；探针期间零 emission（任务恒 queued 0%）', async () => {
+    const seenBuffers: ArrayBuffer[] = []
+    const h = createHarness({
+      sha256Hex: vi.fn(async (buffer: ArrayBuffer) => {
+        seenBuffers.push(buffer) // 「假 subtle 记录收到的 ArrayBuffer」
+        return 'f'.repeat(64)
+      }),
+      instantProbe: vi.fn(async (): Promise<'linked' | 'miss'> => 'linked'),
+    })
+    const { file, bytes } = createInstantFile('hello-instant', { type: 'text/plain' })
+    await h.run(file)
+
+    expect(h.deps.uploadFile).not.toHaveBeenCalled() // 命中=零字节，直传请求绝不发出
+    expect(callsOf(h.deps.startMultipart)).toHaveLength(0)
+    expect(h.deps.storage.save).not.toHaveBeenCalled()
+    const doneRows = h.tasks.filter((t) => t.status === 'done')
+    expect(doneRows).toHaveLength(1) // done 只发一次 → 队列层 invalidate 恰一次
+    expect(doneRows[0]).toMatchObject({ status: 'done', percent: 100, instant: true })
+    expect(h.tasks.every((t) => t.status !== 'uploading')).toBe(true) // 不新增状态：探针期间无 uploading emission
+    // 哈希输入=文件 arrayBuffer 原字节（逐字节相等；Array.from 绕开 vitest/jsdom 跨 realm Uint8Array 比较怪癖）
+    expect(seenBuffers).toHaveLength(1)
+    expect(Array.from(new Uint8Array(seenBuffers[0]!))).toEqual(Array.from(bytes))
+    // 探针入参=后端 instantFileRequest 形状（content_type 取 file.type 原值）
+    expect(callsOf(h.deps.instantProbe)).toEqual([
+      [{ sha256: 'f'.repeat(64), original_name: NAME, content_type: 'text/plain', folder_id: FOLDER }],
+    ])
+  })
+
+  it('miss → uploadFile 恰一次、行为与旧直传逐字段一致（done 无 instant；file.type 空 → octet-stream 兜底）', async () => {
+    const h = createHarness()
+    const { file } = createInstantFile('cold-bytes', { type: '' })
+    await h.run(file)
+    expect(h.deps.uploadFile).toHaveBeenCalledTimes(1)
+    expect(h.deps.uploadFile).toHaveBeenCalledWith(file, FOLDER)
+    expect(callsOf(h.deps.instantProbe)).toEqual([
+      [{ sha256: 'e'.repeat(64), original_name: NAME, content_type: 'application/octet-stream', folder_id: FOLDER }],
+    ])
+    const statuses = h.tasks.map((t) => t.status)
+    expect(statuses).toEqual(['uploading', 'done']) // 与既有用例①的 emission 序列完全一致
+    expect(h.tasks.at(-1)).toMatchObject({ status: 'done', percent: 100 })
+    expect(h.tasks.at(-1)!.instant).toBeUndefined()
+  })
+
+  it('探针 507 → 静默降级直传：不提前报错、任务不因探针 failed，最终 done', async () => {
+    const h = createHarness({
+      instantProbe: vi.fn(async (): Promise<'linked' | 'miss'> => {
+        throw new ApiError('云仓可用存储空间不足。', 507)
+      }),
+    })
+    const { file } = createInstantFile('quota-but-silent')
+    await h.run(file)
+    expect(h.deps.uploadFile).toHaveBeenCalledTimes(1)
+    expect(h.tasks.some((t) => t.status === 'failed')).toBe(false)
+    expect(h.tasks.every((t) => t.error === undefined)).toBe(true) // 错误面零提前外泄（配额由直传原样复现）
+    expect(h.tasks.at(-1)!.status).toBe('done')
+  })
+
+  it('哈希失败（无 subtle 旧环境）→ 降级直传不阻断，探针不发', async () => {
+    const h = createHarness({
+      sha256Hex: vi.fn(async () => {
+        throw new TypeError("Cannot read properties of undefined (reading 'digest')")
+      }),
+    })
+    const { file } = createInstantFile('no-subtle-env')
+    await h.run(file)
+    expect(h.deps.instantProbe).not.toHaveBeenCalled()
+    expect(h.deps.uploadFile).toHaveBeenCalledTimes(1)
+    expect(h.tasks.at(-1)!.status).toBe('done')
+  })
+
+  it('哈希期间取消 → cancelled，探针/uploadFile 零后续调用（假 sha 悬挂也被掐停）', async () => {
+    let releaseHash!: (value: string) => void
+    const h = createHarness({
+      sha256Hex: vi.fn(
+        () =>
+          new Promise<string>((resolve) => {
+            releaseHash = resolve
+          }),
+      ),
+    })
+    const { file } = createInstantFile('cancel-in-hash')
+    const run = h.run(file)
+    await waitFor(() => expect(h.deps.sha256Hex).toHaveBeenCalledTimes(1))
+    h.controller.abort()
+    releaseHash('arrives-after-abort') // 迟到的哈希结果必须被丢弃
+    await run
+    expect(h.deps.instantProbe).not.toHaveBeenCalled()
+    expect(h.deps.uploadFile).not.toHaveBeenCalled()
+    expect(h.deps.cancel).not.toHaveBeenCalled() // 直传无分片会话可 cancel
+    expect(h.deps.storage.forget).not.toHaveBeenCalled()
+    expect(h.tasks.every((t) => t.status !== 'done')).toBe(true)
+    expect(h.tasks.at(-1)!.status).toBe('cancelled')
+  })
+
+  it('探针期间取消 → 并入既有 cancelled 分支；迟到的 201 命中也不再 emit done、不发直传', async () => {
+    let releaseProbe!: (value: 'linked' | 'miss') => void
+    const h = createHarness({
+      instantProbe: vi.fn(
+        () =>
+          new Promise<'linked' | 'miss'>((resolve) => {
+            releaseProbe = resolve
+          }),
+      ),
+    })
+    const { file } = createInstantFile('cancel-in-probe')
+    const run = h.run(file)
+    await waitFor(() => expect(h.deps.instantProbe).toHaveBeenCalledTimes(1))
+    h.controller.abort()
+    await run // 取消即刻收敛，无需等探针承诺落定
+    releaseProbe('linked')
+    await new Promise((r) => setTimeout(r, 10))
+    expect(h.deps.uploadFile).not.toHaveBeenCalled()
+    expect(h.tasks.every((t) => t.status !== 'done')).toBe(true)
+    expect(h.tasks.at(-1)!.status).toBe('cancelled')
+  })
+
+  it('入探针前已 abort（queued 期取消）→ cancelled，arrayBuffer/sha256Hex/探针/uploadFile 全零调用', async () => {
+    const h = createHarness()
+    const { file } = createInstantFile('never-hashed')
+    // arrayBuffer 归文件桩所有：包一层计数以断言「哈希都还没开始就取消」
+    const spy = vi.fn(async () => new ArrayBuffer(0))
+    const withSpy = { ...file, arrayBuffer: spy } as unknown as File
+    h.controller.abort()
+    await h.run(withSpy)
+    expect(spy).not.toHaveBeenCalled()
+    expect(h.deps.sha256Hex).not.toHaveBeenCalled()
+    expect(h.deps.instantProbe).not.toHaveBeenCalled()
+    expect(h.deps.uploadFile).not.toHaveBeenCalled()
+    expect(h.tasks.at(-1)!.status).toBe('cancelled')
+  })
+
+  it('≥49MiB multipart 路径零改动：sha256Hex/探针从不被调（v1 边界，spec §1.2 阈值以下专属）', async () => {
+    const h = createHarness()
+    await h.run()
+    expect(h.deps.sha256Hex).not.toHaveBeenCalled()
+    expect(h.deps.instantProbe).not.toHaveBeenCalled()
+    expect(h.tasks.at(-1)!.status).toBe('done')
   })
 })
 

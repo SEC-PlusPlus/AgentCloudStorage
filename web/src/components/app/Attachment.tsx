@@ -24,9 +24,10 @@ export interface AttachmentProps {
 }
 
 export function Attachment({ task, onCancel, onRetry }: AttachmentProps) {
-  // T13 carry #11（Task 8 Minor-6）：直传（<49MiB）进行中的取消钮是空转——旧版直传本就无取消入口
-  // （uploadAbort 仅分片流持有），runUpload 直传路径不读 signal，点了请求照跑完。
-  // queued 行的取消=出队（真有效，新版队列能力），不受本规则限制；merging 禁断维持旧 544 行。
+  // T13 carry #11（Task 8 Minor-6）：直传（<49MiB）**请求在途**的取消钮是空转——旧版直传本就无取消入口
+  // （uploadAbort 仅分片流持有），请求体无法中断，点了也照跑完。
+  // W3 注：秒传探针/哈希期任务仍是 queued（不新增状态），queued 行取消钮天然覆盖该窗口
+  // （runUpload 探针段 abort-race 真掐，cancelled 收敛、零后续请求）；merging 禁断维持旧 544 行。
   const canCancel =
     task.status === 'queued' || (task.status === 'uploading' && task.size >= MULTIPART_THRESHOLD_BYTES)
   const canRetry = task.status === 'failed' || task.status === 'cancelled'
@@ -57,6 +58,16 @@ export function Attachment({ task, onCancel, onRetry }: AttachmentProps) {
           {showPercent ? ` · ${task.percent}%` : ''}
           {task.error ? `：${task.error}` : ''}
         </span>
+        {/* W3 秒传徽标（spec §1.2）：命中差异仅以行内徽标呈现——批尾 toast「已上传 N 个文件。」仍是
+            权威播报，不另弹「秒传成功」toast（builder-check 裁定）。仅 instant 行渲染。 */}
+        {task.instant ? (
+          <span
+            data-testid="instant-badge"
+            className="shrink-0 rounded-full border border-white/15 bg-white/10 px-1.5 py-0.5 text-[10px] text-[var(--color-foreground)]"
+          >
+            ⚡秒传
+          </span>
+        ) : null}
         <span className="flex shrink-0 gap-1">
           {canCancel ? (
             <Button size="sm" variant="ghost" onClick={onCancel}>

@@ -2,8 +2,11 @@
 // 单文件编排全部委托 lib/uploads.runUpload（此处只做接线、记账与缓存失效）。
 // 模块级 zustand 单例（非 context）：AppLayout（Dock 上传钮/队列面板）与 FilesPage（工具栏/拖放）
 // 跨路由树共享同一队列——旧版是 FileWorkbench 页内全局 busy 锁，队列是其多任务替身。
-// 批量记账保留旧文案：全部收敛「已上传 N 个文件。」/ 取消「已取消当前大文件上传。」/ 失败沿用
-// 旧 uploadFiles catch：中断批次（其余文件不再自动跑，行停 queued 等用户重试）+ 原样错误文案。
+// 批量记账保留旧文案：全部收敛「已上传 N 个文件。」/ 失败沿用旧 uploadFiles catch：中断批次
+// （其余文件不再自动跑，行停 queued 等用户重试）+ 原样错误文案。取消文案 W3 中性化为「上传已取消。」
+// （旧串对直传小文件是事实错误，spec §1.2-5 有意变更）。
+// W3 秒传接线：deps 注入 sha256Hex/instantProbe 真 adapter；命中行=done+instant（批尾 toast 权威、
+// 不另弹秒传 toast，队列行内「⚡秒传」徽标见 Attachment）；invalidate/记账复用既有 done 分支，零新路由。
 import { useEffect } from 'react'
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -12,10 +15,12 @@ import {
   cancelMultipartUpload,
   completeMultipartUpload,
   getMultipartUploadProgress,
+  instantProbe,
   startMultipartUpload,
   uploadFile,
   uploadMultipartPart,
 } from '@/api/storage'
+import { sha256Hex } from '@/lib/crypto'
 import { makeLocalStorageUploadStorage, runUpload, type UploadDeps, type UploadTask } from '@/lib/uploads'
 import { useAuth } from '@/stores/auth'
 
@@ -79,6 +84,11 @@ function pump(): void {
     cancel: cancelMultipartUpload,
     storage: makeLocalStorageUploadStorage(useAuth.getState().user?.id ?? 0), // 旧 savedUploadsKey：acs.multipart.<uid>
     signal: controller.signal,
+    // W3 秒传探针真 adapter（薄层不进单测；编排层 fake 覆盖全分支）：
+    // 命中 → done+instant 行（无逐条 toast，批尾 toast 权威，差异以行内「⚡秒传」徽标呈现）；
+    // 未命中/任何失败 → 编排层静默降级普通直传，用户零双弹。
+    sha256Hex,
+    instantProbe,
   }
   runUpload(entry.file, entry.folderID, deps, (task) => {
     upsertRow({ ...task, id: entry.rowId }) // 行身份归队列所有；runUpload 的内部 id 在此覆写
@@ -88,7 +98,10 @@ function pump(): void {
     }
     if (task.status === 'cancelled') {
       halted = true
-      toast('已取消当前大文件上传。') // 旧 uploadFiles:498/507 文案
+      // W3 有意变更（spec §1.2-5）：旧文案「已取消当前大文件上传。」沿用自 uploadFiles:498/507，
+      // 对直传小文件（含秒传探针期取消）是事实错误 → 中性化为「上传已取消。」。
+      // 钉测：useUploadManager.test.tsx「W3 秒传探针」套件的「探针期间取消」用例。
+      toast('上传已取消。')
     }
   })
     .catch((error: unknown) => {

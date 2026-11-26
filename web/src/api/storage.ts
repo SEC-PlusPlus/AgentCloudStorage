@@ -36,6 +36,32 @@ export async function uploadFile(file: File, folderId: number) {
   form.append('folder_id', String(folderId))
   return request<FileItem>('/api/v1/files', { method: 'POST', body: form }, token())
 }
+
+/** W3 秒传探针入参 = 后端 instantFileRequest（internal/httpapi/file_handler.go），字段名逐字对齐。 */
+export interface InstantProbeInput {
+  sha256: string
+  original_name: string
+  content_type: string
+  folder_id: number
+}
+
+/**
+ * W3：秒传探针 POST /api/v1/files/instant（命中=服务端零字节建账；未命中=原样走直传，spec §1.2）。
+ * 状态判别：201 命中 → 'linked'；200 {"exists":false} → 'miss'；其余（400/401/404/409/507/5xx/网络）
+ * 由 request 统一抛 ApiError——**静默降级直传是编排层的决定**（lib/uploads.ts probeInstant 的 catch），
+ * 此处不做任何吞错/特例（401 同样不特判：降级路径随后自己撞 401，行为一致，spec §1.2-2 裁定）。
+ * 注：client.request 不透出 HTTP 状态码，命中/未命中以响应体互斥形状判别——
+ * 201=fileSuccessResponse（无 exists 字段，含 id），200 miss（无 id 字段）；两者皆非视为异常抛出。
+ */
+export async function instantProbe(input: InstantProbeInput): Promise<'linked' | 'miss'> {
+  const body = await request<{ id?: number; exists?: boolean }>('/api/v1/files/instant', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }, token())
+  if (body && body.exists === false) return 'miss'
+  if (body && typeof body.id === 'number') return 'linked'
+  throw new ApiError('秒传探针响应形状异常。', 0) // 理论不可达（后端两形状必居其一）——异常面留给编排层静默降级
+}
 export const startMultipartUpload = (file: File, folderId: number) =>
   request<MultipartUploadSession>('/api/v1/uploads', {
     method: 'POST',
