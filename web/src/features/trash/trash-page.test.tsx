@@ -379,3 +379,16 @@ describe('路由注册：/trash 占位兑现为真实页面（测试锚点保留
     await waitFor(() => expect(router.state.location.pathname).toBe('/login'))
   })
 })
+
+// W1 门控：分享入口只在文件工作台的活跃视图——回收站视图不渲染任何分享 UI（无右键菜单挂载，
+// 面板动作组亦不含「分享」；share-dialog.test 钉 files 侧，此处钉 trash 侧，双向收口）。
+describe('回收站无分享入口（W1 门控）', () => {
+  it('勾选回收站文件行 → 面板可见但动作组不含「分享」', async () => {
+    renderPage()
+    await screen.findByText('report.pdf')
+    await userEvent.click(screen.getByRole('checkbox', { name: '选择 report.pdf' }))
+    const panel = await screen.findByTestId('detail-panel')
+    expect(within(panel).queryByRole('button', { name: '分享' })).toBeNull()
+    expect(within(panel).getByRole('button', { name: '恢复' })).toBeInTheDocument()
+  })
+})

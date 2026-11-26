@@ -87,6 +87,10 @@ export function translateError(error: string, status: number): string {
   if (error.includes('upload completion is pending')) return '文件正在完成合并，请稍后重试或刷新文件列表。'
   if (error.includes('storage quota exceeded')) return '云仓可用存储空间不足。'
   if (error.includes('invalid search keyword')) return '请输入有效的搜索关键词。'
+  // W1 属主分享面：too_many_shares 双上限（单文件 20/账号 50）共用一个中性串（spec §1.1）；
+  // not_found 串全后端仅 share_handler 产出（404 限定防串台）。置于通用 409 兜底之前。
+  if (error.includes('too_many_shares')) return '分享数量已达上限（单文件 20 / 账号 50）。'
+  if (status === 404 && error.includes('not_found')) return '分享不存在或已删除。'
   if (status === 409) return '操作冲突，请刷新后重试。'
   if (error.includes('invalid register request')) return '请检查注册信息是否完整。'
   if (error.includes('invalid login request')) return '请填写邮箱和密码。'

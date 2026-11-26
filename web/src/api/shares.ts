@@ -3,11 +3,14 @@
 // ①不读 stores/auth，fetch 一律不带 Authorization——访客链路（meta 与 verify 两路）绝不携带用户登录 JWT；
 //   fix 评审 MINOR-1：verify 也移出 client.request（见红线③），公开链路对 auth 侧代码路径零牵连，
 //   自然也不触发 client.ts:46 的 401→登出分支；
+//   W1 注：本文件自此含访客/属主两段——红线①仅约束上方访客段（publicRequest 及三个导出函数）；
+//   属主段见文件尾分隔注释，全走 client.request 携带用户 JWT（spec §7「两模块共文件不同函数，注释分区」）。
 // ②下载走 ?access=<share_token>（share scope JWT），浏览器可直接导航/另存；
 // ③meta 与 verify 都可能返回 spec §3 的结构化错误体（410 带 reason：revoked/expired/file_unavailable；
 //   404=not_found）。client.ApiError 只有 message/status 装不下 reason，故公开链路自带最小 fetch
 //   （publicRequest）抛 SharePublicError(status+reason)；访客文案映射收敛在 ShareRoute（本页唯一消费者）。
-import { ApiError } from '@/api/client'
+import { ApiError, request } from '@/api/client'
+import { getToken } from '@/stores/auth'
 
 export type ShareUnavailableReason = 'revoked' | 'expired' | 'file_unavailable'
 
@@ -82,4 +85,53 @@ export function verifySharePassword(token: string, password: string): Promise<Sh
 export function shareDownloadUrl(token: string, access?: string | null): string {
   const url = `${sharePath(token)}/download`
   return access ? `${url}?access=${encodeURIComponent(access)}` : url
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 属主段（Task W1 / W 轨 spec §2）：POST /api/v1/files/:id/shares · GET /api/v1/shares ·
+// DELETE /api/v1/shares/:token（router.go:62-64，protected 组）。一律走 client.request 携带用户
+// JWT（getToken 同 storage.ts 惯例），401 走 client 的登出分支——与上方访客段红线①互不牵连。
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** 与后端 shareResponse 逐字段一致（share_handler.go:65——线上无 id 字段，token 即主键载体）。 */
+export interface ShareItem {
+  token: string
+  canonical_url: string
+  display_name: string
+  expires_at: string | null
+  download_count: number
+  revoked: boolean
+  created_at: string
+  has_password: boolean
+}
+
+/** 创建选项：expires_in 秒数（省略=永久）；password 省略=无访问密码（后端指针语义，前端不发明字段）。 */
+export interface ShareCreateOptions {
+  password?: string
+  expires_in?: number
+}
+
+export function createShare(fileId: number, opts: ShareCreateOptions = {}): Promise<ShareItem> {
+  const body: ShareCreateOptions = {}
+  if (opts.password !== undefined) body.password = opts.password
+  if (opts.expires_in !== undefined) body.expires_in = opts.expires_in
+  return request<ShareItem>(
+    `/api/v1/files/${fileId}/shares`,
+    { method: 'POST', body: JSON.stringify(body) },
+    getToken(),
+  )
+}
+
+export function listShares(): Promise<{ items: ShareItem[] }> {
+  return request<{ items: ShareItem[] }>('/api/v1/shares', {}, getToken())
+}
+
+/** 撤销=204（request 对 204 返回 undefined）；重复撤销幂等由服务端负责。 */
+export function revokeShare(token: string): Promise<void> {
+  return request<void>(`/api/v1/shares/${encodeURIComponent(token)}`, { method: 'DELETE' }, getToken())
+}
+
+/** 属主分享落地页 URL（访客路由 /d/:token，routes/index.tsx 已注册）。token 原样拼入（服务端生成即 URL-safe）。 */
+export function shareUrl(token: string): string {
+  return `${window.location.origin}/d/${token}`
 }

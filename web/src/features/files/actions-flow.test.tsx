@@ -331,7 +331,8 @@ describe('右键菜单：定位打开 + 键盘角色 + 禁用项', () => {
     fireEvent.contextMenu(screen.getByText('a.txt').closest('tr') as HTMLElement)
 
     const menu = await screen.findByRole('menu', { name: '“a.txt”操作菜单' })
-    for (const label of ['预览', '下载', '重命名', '移动到…', '移入回收站']) {
+    // W1：文件行菜单含「分享」（属主分享入口=右键菜单+面板，RowToolbar 浮条不放——builder-check 裁定）。
+    for (const label of ['预览', '下载', '分享', '重命名', '移动到…', '移入回收站']) {
       expect(within(menu).getByRole('menuitem', { name: label })).toBeInTheDocument()
     }
     const ask = within(menu).getByRole('menuitem', { name: '问 AI' })
@@ -352,7 +353,17 @@ describe('右键菜单：定位打开 + 键盘角色 + 禁用项', () => {
     const menu = await screen.findByRole('menu', { name: '“照片”操作菜单' })
     expect(within(menu).queryByRole('menuitem', { name: '预览' })).toBeNull()
     expect(within(menu).queryByRole('menuitem', { name: '下载' })).toBeNull()
+    expect(within(menu).queryByRole('menuitem', { name: '分享' })).toBeNull() // W1：文件夹不可分享
     expect(within(menu).getByRole('menuitem', { name: '删除文件夹' })).toBeInTheDocument()
+  })
+
+  it('W1：文件行右键「分享」→ ShareDialog 打开（与面板入口同源弹窗）', async () => {
+    renderPage()
+    await screen.findByText('a.txt')
+    fireEvent.contextMenu(screen.getByText('a.txt').closest('tr') as HTMLElement)
+    await userEvent.click(await screen.findByRole('menuitem', { name: '分享' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByLabelText('访问密码（可选）')).toBeInTheDocument()
   })
 })
 
