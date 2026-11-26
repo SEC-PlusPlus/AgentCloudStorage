@@ -61,6 +61,8 @@
 - [ ] **Step 2:** RED → **Step 3:** 实现（探针段包 try/catch→'error' 降级；signal 检查在 digest 前后各一次）。
 - [ ] **Step 4:** 全量绿（Task 8 既有上传测试全数原样）+build → **Step 5:** Commit `feat(web): instant-upload probe before direct upload`。
 
+注：W3 实际契约以 spec 修订为准——probe 返回 linked|miss+throw 静默降级、无独立秒传 toast（徽标）、无新 FileActionType。
+
 ### Task W4: 真机 UI 剧本 + 文档回写
 
 - [ ] 栈已在线（8080/8001/5173 或重启）；`npm run dev` 后 playwright? **无浏览器自动化**→ curl 级验证 probe/dialog API 面 + **用户手测剧本写进报告**（建链→无痕→429→撤销；上传 bob 同字节文件→秒传成功 toast）。

@@ -1,6 +1,6 @@
 # W 轨设计附录：属主分享 UI + 秒传前端接线
 
-- 日期：2026-11-26 ｜ 状态：待审查 ｜ 上游：share-links spec v2 §1（owner UI 另立）、instant spec v2 §5.5（前端推迟）——本文即这两个"另立"
+- 日期：2026-11-26 ｜ 状态：已实施（W1-W4 完成，终审后文档校准 2026-11-26）｜ 上游：share-links spec v2 §1（owner UI 另立）、instant spec v2 §5.5（前端推迟）——本文即这两个"另立"
 - 交付边界：纯前端（web/），零后端改动；两功能各一个任务包 + 一个收尾包
 
 ## 1. 功能介绍与实现逻辑
@@ -16,7 +16,7 @@
 直传通道（`size < 49MiB` 阈值以下，维持 multipart 大文件不探针的 v1 边界）：
 1. `file.arrayBuffer()` → `crypto.subtle.digest('SHA-256')`（**已知代价**：SubtleCrypto 无流式 API，峰值内存≈文件大小，49MiB 封顶可接受；JS 手写分块实现否决——引入非标准密码代码，简历项目不可取）。
 2. `POST /api/v1/files/instant {sha256, original_name, content_type, folder_id}`：
-   - 201（命中）→ 任务直接 done（percent 100），toast「秒传成功」，命中即完成复用 `useUploadManager.invalidateFileViews()`（['files']+['usage']）与既有 done 分支，**不新增 FileActionType**；批次尾 toast 统一「已上传 N 个文件。」**不另弹秒传 toast**，差异以队列行内「⚡秒传」徽标呈现（UploadTask.instant 标记）；
+   - 201（命中）→ 任务直接 done（percent 100），复用既有 done 分支 + `useUploadManager.invalidateFileViews()`（['files']+['usage']），**不新增 FileActionType**；通知以批次尾 toast「已上传 N 个文件。」为唯一权威（秒传行计入总数），**不另弹独立秒传 toast**（builder-check 裁定），差异以队列行内「⚡秒传」徽标呈现（UploadTask.instant 标记）；
    - 200 `{"exists":false}`（未命中）→ **原样继续既有直传流程**（探针是机会主义优化，服务端随后 tee 哈希自然入账）；
    - 探针任何失败（401/409/507/网络）→ 同样**静默降级为普通直传**（配额/登录错误由直传原样复现，用户零双弹），让真正的上传路径给出用户熟悉的错误（配额/登录过期错误将由直传原样复现）。401 例外？——否，降级路径自己会 401，行为一致，不加特例。
 3. 哈希计算失败（无 subtle 的旧环境/内存拒绝）→ 降级直传，不阻断。
@@ -28,21 +28,21 @@
 ```ts
 // api/shares.ts 追加属主段
 interface ShareCreateOptions { password?: string; expires_in?: number }
-interface ShareItem { id; token; display_name; expires_at: string|null; download_count: number; revoked: boolean; created_at }
+interface ShareItem { token; canonical_url; display_name; expires_at: string|null; download_count: number; revoked: boolean; created_at; has_password }  // 与线上 JSON 逐名核对；无 id，React key=token
 createShare(fileId, opts) → ShareItem   // client.request，带 auth
 listShares() → { items: ShareItem[] }
 revokeShare(token) → void(204)
 shareUrl(token) = `${location.origin}/d/${token}`
 ```
-`lib/uploads.ts`：`UploadDeps` 增注入点 `sha256Hex(buf: ArrayBuffer): Promise<string>` 与 `instantProbe(input): Promise<'linked'|'miss'>`——真实实现在薄 adapter（不进单测），编排逻辑纯函数可全 fake（沿用 Task 8 零真网络测试模式）。
+`lib/uploads.ts`：`UploadDeps` 增注入点 `sha256Hex(buf: ArrayBuffer): Promise<string>` 与 `instantProbe(input): Promise<'linked'|'miss'>`（失败一律 throw，编排层 catch 静默降级）——真实实现在薄 adapter（不进单测），编排逻辑纯函数可全 fake（沿用 Task 8 零真网络测试模式）。
 
 ## 3. 控制层（路由/入口接线）
-- `routes/index.tsx`：/shares 路由（authed，AppLayout 内）+ nav 项（sidebar 现有 navTrail/图标体系内新增，图标 lucide `Share2`）。
+- `routes/index.tsx`：/shares 路由（authed，AppLayout 内）+ nav 项（无侧栏，导航=底部 Dock——Dock 首组加 `Share2` 项，与回收站/搜索同形）。
 - 入口=**RowContextMenu + DetailPanel 动作组**（遵守既有 abc-4 裁定：浮条 RowToolbar 只放批量动作，单目标动作唯一页侧载体是 DetailPanel，FilesPage 负责 dialog state 挂载）；回收站视图/文件夹行不出现。
 - 新文件：`features/files/ShareDialog.tsx`、`features/shares/SharesPage.tsx`（新 feature 目录，对齐 files/trash 惯例）。
 
 ## 4. 逻辑层
-- `actions.ts`：`FileActionType` 增 `'instant'`（invalidations 与直传成功同键）；分享弹窗内部用 `useMutation`（MoveDialog 同款），无跨页共享状态。
+- `actions.ts`：**零改动**——命中复用 done 分支 + `invalidateFileViews()`（['files']+['usage']），不新增 `FileActionType`，差异由 `UploadTask.instant` 徽标承载（终审裁定）；分享弹窗内部用 `useMutation`（MoveDialog 同款），无跨页共享状态。
 - 上传编排 `uploadFiles`：直传分支前置探针段（§1.2 顺序），**分片分支零改动**；每任务信号贯通（探针期间取消→中断，任务 cancelled）。
 - 文案：中文，风格沿现有 translateError 表。
 
@@ -60,7 +60,7 @@ shareUrl(token) = `${location.origin}/d/${token}`
 ## 8. 测试与验收
 - W1 单测：ShareDialog（成功→URL 呈现与复制调用、密码 72 字节预检拒绝、409/500 面）、SharesPage（列表渲染/过期态标签/撤销 204 后失效/空态）、行菜单只在文件行出现；`npm test`+`npm run build` 绿。
 - W2 单测（注入 fake）：命中→任务 done+probe 后**不再** PutObject（deps 断言）、miss→走原直传、探针炸→走原直传、探针期间 cancel→cancelled 且无后续请求；哈希输入为文件字节（fake subtle 断言收到的 ArrayBuffer 与原文件一致）。
-- W4 真机剧本（**本地栈 8080/5173，demo/alice/bob 账号**；生产 secplusplus.xyz 不灌测试数据——builder-check 裁定）：demo 账号 UI 建密码分享→无痕开链接→错密 5 次→429 文案→对密下载；alice UI 上传 bob 已有内容的同字节文件→toast「秒传成功」+ objects.refcount+1 实况；两链路演示后 feature-progress/changelog 记录、README 更新"分享管理 UI/秒传前端"已实现行。
+- W4 真机剧本（**本地栈 8080/5173，demo/alice/bob 账号**；生产 secplusplus.xyz 不灌测试数据——builder-check 裁定）：demo 账号 UI 建密码分享→无痕开链接→错密 5 次→429 文案→对密下载；alice UI 上传 bob 已有内容的同字节文件→队列行「⚡秒传」徽标出现 + 批次尾 toast 计数含秒传件（C15.7 口径，不另弹秒传 toast）+ objects.refcount+1 实况；两链路演示后 feature-progress/changelog 记录、README 更新"分享管理 UI/秒传前端"已实现行。
 
 ## 9. 非目标
 分享页 SEO/密码长度策略调整/水印；"我的分享"分页（个人量级全量即可）；大文件秒传；探针结果缓存。
