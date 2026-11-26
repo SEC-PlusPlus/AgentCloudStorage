@@ -3,8 +3,9 @@
 // progress.status 2/3/4 分支、404/409 forget+全新 start（Review Focus #2，其余 status 原样上抛）、
 // 合并阶段忽略取消、取消 cancel+forget、失败抛原始 ApiError 且续传记录保留（Review Focus #5）。
 // 新语义：分片并发（默认 3）不改变「uploadPart 调用次数 = total − uploaded」等可观测结果。
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/api/client'
+import { INSTANT_PROBE_TIMEOUT_MS } from '@/api/storage'
 import {
   MULTIPART_THRESHOLD_BYTES,
   runUpload,
@@ -177,6 +178,12 @@ function partNumbers(h: Harness): number[] {
   const calls = h.deps.uploadPart as ReturnType<typeof vi.fn>
   return calls.mock.calls.map((call) => call[1] as number)
 }
+
+beforeEach(() => {
+  // MINOR-2：编排层 DEV 降级留痕会 console.debug（vitest env DEV=true）——全局静音保持输出 pristine，
+  // 具体断言的用例自行重挂 spy。vi.restoreAllMocks() 在 afterEach 负责复原。
+  vi.spyOn(console, 'debug').mockImplementation(() => {})
+})
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -556,10 +563,12 @@ describe('runUpload：W3 秒传探针接线（spec §1.2 / builder-check 裁定�
     expect(h.tasks.at(-1)!.instant).toBeUndefined()
   })
 
-  it('探针 507 → 静默降级直传：不提前报错、任务不因探针 failed，最终 done', async () => {
+  it('探针 507 → 静默降级直传：不提前报错、任务不因探针 failed，最终 done；MINOR-2 DEV 留痕', async () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {}) // 覆盖文件级静音，验留痕本身
+    const err = new ApiError('云仓可用存储空间不足。', 507)
     const h = createHarness({
       instantProbe: vi.fn(async (): Promise<'linked' | 'miss'> => {
-        throw new ApiError('云仓可用存储空间不足。', 507)
+        throw err
       }),
     })
     const { file } = createInstantFile('quota-but-silent')
@@ -568,6 +577,32 @@ describe('runUpload：W3 秒传探针接线（spec §1.2 / builder-check 裁定�
     expect(h.tasks.some((t) => t.status === 'failed')).toBe(false)
     expect(h.tasks.every((t) => t.error === undefined)).toBe(true) // 错误面零提前外泄（配额由直传原样复现）
     expect(h.tasks.at(-1)!.status).toBe('done')
+    // MINOR-2：降级对用户静默但 DEV 下可观测（reason 不丢——生产「秒传从未命中」可归因）
+    expect(debugSpy).toHaveBeenCalledTimes(1)
+    expect(debugSpy).toHaveBeenCalledWith('instant probe degraded', err)
+  })
+
+  it('RF1：探针永不落定（网络黑洞）→ INSTANT_PROBE_TIMEOUT_MS 封顶静默降级直传，队列不永久挂起', async () => {
+    vi.useFakeTimers()
+    try {
+      const h = createHarness({
+        instantProbe: vi.fn(() => new Promise<'linked' | 'miss'>(() => {})), // 永不 resolve/reject
+      })
+      const { file } = createInstantFile('blackhole')
+      const run = h.run(file)
+      for (let i = 0; i < 64; i++) await Promise.resolve() // 冲微任务：抵达 instantProbe，计时器于 t=0 挂表
+      expect(h.deps.instantProbe).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(INSTANT_PROBE_TIMEOUT_MS - 1)
+      expect(h.deps.uploadFile).not.toHaveBeenCalled() // 窗口未满仍在等探针
+      expect(h.tasks.every((t) => t.status === 'queued')).toBe(true) // 无假 done/failed 泄漏
+      await vi.advanceTimersByTimeAsync(2) // 越 3000ms 界
+      await run
+      expect(h.deps.uploadFile).toHaveBeenCalledTimes(1) // 超时=普通探针失败 → 静默降级
+      expect(h.tasks.at(-1)!.status).toBe('done')
+      expect(vi.getTimerCount()).toBe(0) // 竞速表自清，不残留
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('哈希失败（无 subtle 旧环境）→ 降级直传不阻断，探针不发', async () => {

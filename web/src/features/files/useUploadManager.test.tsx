@@ -48,6 +48,9 @@ beforeEach(() => {
   // sonner 的 toast store 是模块级队列，默认 4s 自毁定时器跨用例存活——
   // W3 新增「已上传 N 个文件。」相邻用例会被上一例残留 toast 串扰（queryByText 命中多个）。
   toast.dismiss()
+  // MINOR-2：无 stubSubtle 的用例走真 sha256Hex → jsdom 无 subtle → 编排层 DEV 降级留痕 console.debug，
+  // 全局静音保 pristine（afterEach 的 unstub/restore 复原）。
+  vi.spyOn(console, 'debug').mockImplementation(() => {})
   vi.stubGlobal(
     'fetch',
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -77,6 +80,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
   resetUploadManager()
 })
 
