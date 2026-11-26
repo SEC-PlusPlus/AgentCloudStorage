@@ -10,7 +10,7 @@
 - 弹窗（复用 MoveDialog 的 Modal 模式）：可选访问密码（≤64 字符且 UTF-8 ≤72 字节前端预检，与服务端 `ErrPasswordTooLong`→400 同语义，避免 400 才知）、有效期选择（永久/1h/1d/7d/30d → 秒数）、提交 `POST /api/v1/files/:id/shares`。
 - 成功态就地转为"链接已生成"：显示 `${origin}/d/<token>` 全 URL + 复制按钮（navigator.clipboard，失败回退选中文本）+ 继续关闭。
 - Dock 新增"我的分享"入口（无侧栏，导航=底部 Dock，图标 Share2）→（路由 /shares）：`GET /api/v1/shares` 列表——文件快照名、链接（复制）、有效期、下载次数、状态列**只标事实态**（已撤销/已过期/未到期）——shareResponse 无文件状态字段，回收站死链不可见（backlog：后端补 file_status 后升级"链接失效"标签），故**不做"有效"承诺、不做 N+1 懒探测**，操作列"撤销"`DELETE /api/v1/shares/:token`（已撤销行不显示撤销钮）。空态文案。
-- 错误透传：409 too_many_shares → toast「分享数量已达上限（单文件 20 / 账号 50）。」——双上限一个中性串；404/410 → **允许在 client.ts translateError 表新增分支**（not_found→「分享不存在或已删除。」等，纯前端表非后端改动）。
+- 错误透传：409 too_many_shares → **对话框内联红字**（controller 裁定 2026-11-26：dialog 内联优于 toast，修订此句初稿表述）「分享数量已达上限（单文件 20 / 账号 50）。」——双上限一个中性串；404/410 → **允许在 client.ts translateError 表新增分支**（not_found→「分享不存在或已删除。」等，纯前端表非后端改动）。
 
 ### 1.2 秒传前端接线（W2）
 直传通道（`size < 49MiB` 阈值以下，维持 multipart 大文件不探针的 v1 边界）：
