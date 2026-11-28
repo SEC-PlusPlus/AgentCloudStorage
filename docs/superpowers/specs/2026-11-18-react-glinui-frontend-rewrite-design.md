@@ -23,7 +23,7 @@
 - 现有功能与交互全部平移，包括：约 30 条后端错误的中文映射、登录限流提示、分片上传续传、文本预览截断等细节
 - 视觉统一为 Glin UI 玻璃 token 体系，布局按 dock 形态**重新设计**（不是换皮）
 - 性能合格：150+ 行文件列表滚动不掉帧；玻璃效果只用于"壳"层表面
-- 全项目 TypeScript strict；构建产物为纯静态 `dist/`，兼容现有 nginx + bundle 部署流程（阿里云 8.148.23.240 / secplusplus.xyz，HTTPS 已启用）
+- 全项目 TypeScript strict；构建产物为纯静态 `dist/`，兼容现有 nginx + bundle 部署流程（阿里云 ECS / secplusplus.xyz，HTTPS 已启用）
 
 **非目标**
 
